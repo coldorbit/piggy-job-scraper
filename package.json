@@ -1,0 +1,37 @@
+{
+  "name": "sites-scraper",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone site scrapers for remote job listings.",
+  "type": "module",
+  "packageManager": "pnpm@9.15.9",
+  "scripts": {
+    "scrape": "pnpm jobright:scrape && pnpm linkedin:scrape && pnpm builtin:scrape && pnpm simplify:scrape && pnpm diversityjobs:scrape && pnpm remoteyeah:scrape && pnpm remotehunter:scrape && pnpm hiringcafe:scrape",
+    "watch": "pnpm jobright:watch & pnpm linkedin:watch & pnpm builtin:watch & pnpm simplify:watch & pnpm diversityjobs:watch & pnpm remoteyeah:watch & pnpm remotehunter:watch & pnpm hiringcafe:watch & wait",
+    "jobright:scrape": "node sites/jobright/scraper.js",
+    "jobright:watch": "node sites/jobright/scraper.js --watch --watch-interval-minutes 5 --max-scrolls 30",
+    "linkedin:scrape": "node sites/linkedin/scraper.js",
+    "linkedin:watch": "node sites/linkedin/scraper.js --watch --watch-interval-minutes 5",
+    "builtin:scrape": "node sites/builtin/scraper.js",
+    "builtin:watch": "node sites/builtin/scraper.js --watch --watch-interval-minutes 5",
+    "simplify:scrape": "node sites/simplify/scraper.js",
+    "simplify:watch": "node sites/simplify/scraper.js --watch --watch-interval-minutes 5",
+    "diversityjobs:scrape": "node sites/diversityjobs/scraper.js",
+    "diversityjobs:watch": "node sites/diversityjobs/scraper.js --watch --watch-interval-minutes 5",
+    "remoteyeah:scrape": "node sites/remoteyeah/scraper.js",
+    "remoteyeah:watch": "node sites/remoteyeah/scraper.js --watch --watch-interval-minutes 5",
+    "remotehunter:scrape": "node sites/remotehunter/scraper.js",
+    "remotehunter:watch": "node sites/remotehunter/scraper.js --watch --watch-interval-minutes 5",
+    "hiringcafe:scrape": "node sites/hiringcafe/scraper.js",
+    "hiringcafe:watch": "node sites/hiringcafe/scraper.js --watch --watch-interval-minutes 5",
+    "jobright:debug": "node sites/jobright/scraper.js --debug --no-headless",
+    "install:browsers": "playwright install chromium"
+  },
+  "dependencies": {
+    "axios": "^1.16.1",
+    "dotenv": "^16.4.7",
+    "pg": "^8.21.0",
+    "playwright": "^1.52.0",
+    "sequelize": "^6.37.8"
+  }
+}

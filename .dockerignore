@@ -1,0 +1,14 @@
+.git
+node_modules
+data
+results
+playwright-report
+test-results
+.jobright-profile
+
+.env
+*.log
+
+*-jobs.json
+*-jobs.csv
+*-seen-jobs.json

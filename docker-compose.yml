@@ -1,0 +1,128 @@
+services:
+  jobright-watch:
+    build: .
+    command:
+      - node
+      - sites/jobright/scraper.js
+      - --watch
+      - --watch-interval-minutes
+      - ${WATCH_INTERVAL_MINUTES:-5}
+      - --max-scrolls
+      - ${JOBRIGHT_MAX_SCROLLS:-30}
+    env_file:
+      - .env
+    restart: unless-stopped
+    init: true
+
+  linkedin-watch:
+    build: .
+    command:
+      - node
+      - sites/linkedin/scraper.js
+      - --watch
+      - --watch-interval-minutes
+      - ${WATCH_INTERVAL_MINUTES:-5}
+    env_file:
+      - .env
+    restart: unless-stopped
+    init: true
+
+  builtin-watch:
+    build: .
+    command:
+      - node
+      - sites/builtin/scraper.js
+      - --watch
+      - --watch-interval-minutes
+      - ${WATCH_INTERVAL_MINUTES:-5}
+    env_file:
+      - .env
+    restart: unless-stopped
+    init: true
+
+  simplify-watch:
+    build: .
+    command:
+      - node
+      - sites/simplify/scraper.js
+      - --watch
+      - --watch-interval-minutes
+      - ${WATCH_INTERVAL_MINUTES:-5}
+    env_file:
+      - .env
+    restart: unless-stopped
+    init: true
+
+  diversityjobs-watch:
+    build: .
+    command:
+      - node
+      - sites/diversityjobs/scraper.js
+      - --watch
+      - --watch-interval-minutes
+      - ${WATCH_INTERVAL_MINUTES:-5}
+    env_file:
+      - .env
+    restart: unless-stopped
+    init: true
+
+  remoteyeah-watch:
+    build: .
+    command:
+      - node
+      - sites/remoteyeah/scraper.js
+      - --watch
+      - --watch-interval-minutes
+      - ${WATCH_INTERVAL_MINUTES:-5}
+    env_file:
+      - .env
+    restart: unless-stopped
+    init: true
+
+  remotehunter-watch:
+    build: .
+    command:
+      - node
+      - sites/remotehunter/scraper.js
+      - --watch
+      - --watch-interval-minutes
+      - ${WATCH_INTERVAL_MINUTES:-5}
+      - --max-scrolls
+      - ${REMOTEHUNTER_MAX_SCROLLS:-10}
+    env_file:
+      - .env
+    restart: unless-stopped
+    init: true
+
+  hiringcafe-watch:
+    build: .
+    command:
+      - node
+      - sites/hiringcafe/scraper.js
+      - --watch
+      - --watch-interval-minutes
+      - ${WATCH_INTERVAL_MINUTES:-5}
+    env_file:
+      - .env
+    restart: unless-stopped
+    init: true
+
+  scrape:
+    build: .
+    command:
+      - sh
+      - -c
+      - >
+        node sites/jobright/scraper.js --max-scrolls "${JOBRIGHT_MAX_SCROLLS:-30}"
+        && node sites/linkedin/scraper.js
+        && node sites/builtin/scraper.js
+        && node sites/simplify/scraper.js
+        && node sites/diversityjobs/scraper.js
+        && node sites/remoteyeah/scraper.js
+        && node sites/remotehunter/scraper.js --max-scrolls "${REMOTEHUNTER_MAX_SCROLLS:-10}"
+        && node sites/hiringcafe/scraper.js
+    env_file:
+      - .env
+    profiles:
+      - manual
+    init: true

@@ -1,0 +1,15 @@
+node_modules/
+playwright-report/
+test-results/
+.jobright-profile/
+data/
+results/*
+results/**/*
+!results/.gitkeep
+!results/*/
+!results/*/.gitkeep
+
+.env
+*-jobs.json
+*-jobs.csv
+*-seen-jobs.json
