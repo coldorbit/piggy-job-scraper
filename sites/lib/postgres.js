@@ -271,6 +271,7 @@ async function deleteExistingDuplicateRows() {
     USING scraped_jobs older
     WHERE newer.duplicate_key IS NOT NULL
       AND newer.duplicate_key = older.duplicate_key
+      AND lower(newer.source) = lower(older.source)
       AND newer.id > older.id
   `);
 }
@@ -377,9 +378,10 @@ async function backfillRoleFamilies() {
 function dedupeRows(rows) {
   const seen = new Set();
   return rows.filter((row) => {
-    if (!row.duplicateKey) return true;
-    if (seen.has(row.duplicateKey)) return false;
-    seen.add(row.duplicateKey);
+    const key = sourceDuplicateKey(row);
+    if (!key) return true;
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
 }
@@ -390,7 +392,7 @@ async function filterExistingRows(rows) {
   if (!duplicateKeys.length && !urls.length) return rows;
 
   const existingRows = await getScrapedJobModel().findAll({
-    attributes: ['duplicateKey', 'url'],
+    attributes: ['duplicateKey', 'source', 'url'],
     where: {
       [Op.or]: [
         ...(duplicateKeys.length ? [{ duplicateKey: { [Op.in]: duplicateKeys } }] : []),
@@ -398,10 +400,15 @@ async function filterExistingRows(rows) {
       ],
     },
   });
-  const existingKeys = new Set(existingRows.map((row) => row.duplicateKey).filter(Boolean));
+  const existingKeys = new Set(existingRows.map(sourceDuplicateKey).filter(Boolean));
   const existingUrls = new Set(existingRows.map((row) => row.url).filter(Boolean));
 
-  return rows.filter((row) => !existingUrls.has(row.url) && !existingKeys.has(row.duplicateKey));
+  return rows.filter((row) => !existingUrls.has(row.url) && !existingKeys.has(sourceDuplicateKey(row)));
+}
+
+function sourceDuplicateKey(row) {
+  if (!row?.duplicateKey) return '';
+  return `${String(row.source || '').toLowerCase()}:${row.duplicateKey}`;
 }
 
 function duplicateKeyForJob(job) {
