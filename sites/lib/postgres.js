@@ -137,7 +137,7 @@ export async function ensureJobsTable() {
   await ensureDuplicateKeyColumn();
   await ensureHiddenJobColumns();
   await deleteExistingNonEnglishRows();
-  await deleteExistingJobrightApplyNowRows();
+  await deleteExistingJobrightNonAutofillApplyRows();
   await backfillRoleFamilies();
   initialized = true;
 }
@@ -309,7 +309,7 @@ async function deleteExistingNonEnglishRows() {
   } while (rows.length === 1000);
 }
 
-async function deleteExistingJobrightApplyNowRows() {
+async function deleteExistingJobrightNonAutofillApplyRows() {
   const [, metadata] = await getSequelize().query(`
     DELETE FROM scraped_jobs
     WHERE lower(source) = 'jobright'
@@ -317,10 +317,13 @@ async function deleteExistingJobrightApplyNowRows() {
         COALESCE(raw_job ->> 'listingText', '') ~* 'apply[[:space:]]+now'
         OR COALESCE(listing_text, '') ~* 'apply[[:space:]]+now'
       )
+      AND COALESCE(raw_job ->> 'applyMode', '') !~* 'auto[[:space:]]*fill'
+      AND COALESCE(raw_job ->> 'listingText', '') !~* 'apply.{0,40}auto[[:space:]]*fill'
+      AND COALESCE(listing_text, '') !~* 'apply.{0,40}auto[[:space:]]*fill'
   `);
   const deletedCount = Number(metadata?.rowCount || 0);
   if (deletedCount) {
-    console.log(`Deleted ${deletedCount} existing Jobright jobs with Apply Now on the listing page.`);
+    console.log(`Deleted ${deletedCount} existing Jobright Apply Now jobs without autofill.`);
   }
 }
 

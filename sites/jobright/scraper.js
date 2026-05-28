@@ -20,7 +20,6 @@ const DEFAULT_JOBRIGHT_SEARCHES = [
 ];
 const DEFAULT_JOBRIGHT_URLS = DEFAULT_JOBRIGHT_SEARCHES.map(searchToJobrightUrl);
 const APPLY_WITH_AUTOFILL_PATTERN = /\bapply\b.{0,40}\bauto\s*fill\b/i;
-const APPLY_NOW_PATTERN = /\bapply\s+now\b/i;
 const OUTPUT_FIELDS = [
   'title',
   'company',
@@ -248,10 +247,6 @@ function hasApplyWithAutofill(text) {
   return APPLY_WITH_AUTOFILL_PATTERN.test(cleanWhitespace(text));
 }
 
-function hasApplyNow(text) {
-  return APPLY_NOW_PATTERN.test(cleanWhitespace(text));
-}
-
 function parseCardText(text) {
   const lines = cleanLines(text);
   let compact = lines.join(' ');
@@ -372,10 +367,6 @@ async function collectListingJobs(page, sourceUrl, debug = false, seenUrls = new
     const listingText = cleanWhitespace(card.text);
     if (!listingText) continue;
     if (debug && seenUrls.size <= 5) console.log(`Card ${seenUrls.size}: ${listingText.slice(0, 300)}`);
-    if (hasApplyNow(listingText)) {
-      if (debug) console.log(`Skipping Jobright card with Apply Now on listing page: ${url}`);
-      continue;
-    }
 
     const parsed = mergeNonEmpty(parseCardText(listingText), card);
     const filterText = [listingText, parsed.location, parsed.workMode].filter(Boolean).join(' ');
@@ -567,6 +558,11 @@ async function inspectJobDetail(context, job, options) {
     }
 
     job.applyMode = hasAutofillAction || hasApplyWithAutofill(detailText) ? 'Apply with Autofill' : '';
+    if (!job.applyMode) {
+      if (debug) console.log(`Skipping Jobright job without Apply with Autofill: ${job.url}`);
+      return null;
+    }
+
     if (includeDescription && descriptionText) {
       job.description = descriptionText.slice(0, 20000);
       if (job.description) {
