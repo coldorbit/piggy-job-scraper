@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 import contextlib
 import json
+import logging
 import math
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from types import SimpleNamespace
+
+logging.basicConfig(stream=sys.stderr)
 
 try:
     from jobspy import scrape_jobs

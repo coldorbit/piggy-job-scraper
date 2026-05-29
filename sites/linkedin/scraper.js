@@ -245,11 +245,13 @@ async function scrapeLinkedInWithJobSpy(searchSources, args) {
   let stdout;
   let stderr;
   try {
-    ({ stdout, stderr } = await execFileAsync(python, [helperPath, JSON.stringify(helperConfig)], {
+    const result = await execFileAsync(python, [helperPath, JSON.stringify(helperConfig)], {
       encoding: 'utf8',
       maxBuffer: 50 * 1024 * 1024,
       timeout,
-    }));
+    });
+    stdout = result.stdout;
+    stderr = result.stderr;
   } catch (error) {
     const detail = cleanWhitespace(error.stderr || error.stdout || error.message);
     throw new Error(`JobSpy bridge failed: ${detail}`);
@@ -258,10 +260,23 @@ async function scrapeLinkedInWithJobSpy(searchSources, args) {
   if (args.debug && stderr) process.stderr.write(stderr);
 
   try {
-    const rows = JSON.parse(stdout || '[]');
+    const rows = parseJobSpyJson(stdout);
     return rows.map((row) => jobSpyRowToJob(row));
   } catch (error) {
     throw new Error(`JobSpy returned invalid JSON: ${error.message}`);
+  }
+}
+
+function parseJobSpyJson(stdout) {
+  const output = String(stdout || '').trim();
+  if (!output) return [];
+  try {
+    return JSON.parse(output);
+  } catch {
+    const jsonStart = output.indexOf('[');
+    const jsonEnd = output.lastIndexOf(']');
+    if (jsonStart === -1 || jsonEnd === -1 || jsonEnd < jsonStart) throw new Error(output.slice(0, 500));
+    return JSON.parse(output.slice(jsonStart, jsonEnd + 1));
   }
 }
 
