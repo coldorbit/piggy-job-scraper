@@ -3,6 +3,7 @@ import axios from 'axios';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { filterExcludedEngineeringRoles } from '../lib/jobFilters.js';
 import { saveJobsToPostgres } from '../lib/postgres.js';
@@ -149,7 +150,7 @@ Options:
   --watch                    Keep polling LinkedIn and posting newly inserted jobs
   --watch-interval-minutes N Minutes between watch runs, default 5
   --max-pages N              Guest API pages to scrape per search, default 2
-  --detail-concurrency N     Detail page concurrency, default 3
+  --detail-concurrency N     Backward-compatible no-op; JobSpy handles detail fetching
   --limit N                  Maximum jobs to save, 0 means no limit
   --timeout-ms N             Fetch timeout, default 60000
   --no-slack                 Disable Slack posting for this run
@@ -159,26 +160,6 @@ Options:
 
 function cleanWhitespace(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
-}
-
-function stripTags(value) {
-  return cleanWhitespace(String(value || '').replace(/<[^>]*>/g, ' '));
-}
-
-function decodeHtml(value) {
-  return String(value || '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&#(\d+);/g, (_match, code) => String.fromCodePoint(Number(code)))
-    .replace(/&#x([0-9a-f]+);/gi, (_match, code) => String.fromCodePoint(Number.parseInt(code, 16)))
-    .replace(/&#39;|&apos;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>');
-}
-
-function cleanHtmlText(value) {
-  return cleanWhitespace(decodeHtml(stripTags(value)));
 }
 
 function csvEscape(value) {
@@ -205,14 +186,6 @@ function searchUrl(search, start = 0) {
   return url.toString();
 }
 
-function pageUrl(sourceUrl, pageNumber) {
-  const url = new URL(sourceUrl);
-  if (url.pathname.includes('/jobs-guest/jobs/api/seeMoreJobPostings/search')) {
-    url.searchParams.set('start', String((pageNumber - 1) * 25));
-  }
-  return url.toString();
-}
-
 async function resolveSourceUrls(args) {
   const urls = [...args.urls, ...(await readUrlFile(args.urlsFile))];
   const searches = args.searches.length ? args.searches : DEFAULT_LINKEDIN_SEARCHES;
@@ -227,166 +200,90 @@ async function resolveSourceUrls(args) {
   return uniqueUrls;
 }
 
-async function fetchHtml(url, timeoutMs) {
-  try {
-    return await fetchHtmlWithCurl(url, timeoutMs);
-  } catch (error) {
-    if (error.code !== 'ENOENT') console.warn(`curl fetch failed for ${url}: ${error.message}`);
-  }
+async function resolveSearchSources(args) {
+  const sourceUrls = await resolveSourceUrls(args);
+  const searchSources = [];
+  const seenSearches = new Set();
 
-  let lastError;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    try {
-      const response = await axios.get(url, {
-        timeout: timeoutMs,
-        responseType: 'text',
-        transformResponse: [(data) => data],
-        headers: {
-          'user-agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-          accept: 'text/html,application/xhtml+xml',
-        },
-      });
-      return response.data;
-    } catch (error) {
-      lastError = error.response ? new Error(`LinkedIn returned ${error.response.status} for ${url}`) : error;
-      if (attempt < 3) await sleep(750 * attempt);
+  for (const sourceUrl of sourceUrls) {
+    const parsed = new URL(sourceUrl);
+    const search = cleanWhitespace(parsed.searchParams.get('keywords') || '');
+    if (!search) {
+      throw new Error(`LinkedIn JobSpy scraping requires a search URL with a keywords parameter: ${sourceUrl}`);
     }
+    if (seenSearches.has(search)) continue;
+    seenSearches.add(search);
+    searchSources.push({ search, sourceUrl });
   }
 
-  throw lastError;
+  return searchSources;
 }
 
-async function fetchHtmlWithCurl(url, timeoutMs) {
-  const timeoutSeconds = String(Math.max(Math.ceil(timeoutMs / 1000), 1));
-  const { stdout } = await execFileAsync(
-    'curl',
-    [
-      '--fail',
-      '--location',
-      '--silent',
-      '--show-error',
-      '--retry',
-      '2',
-      '--retry-max-time',
-      timeoutSeconds,
-      '--max-time',
-      timeoutSeconds,
-      '--user-agent',
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-      '--header',
-      'accept: text/html,application/xhtml+xml',
-      url,
-    ],
-    {
-      encoding: 'utf8',
-      maxBuffer: 20 * 1024 * 1024,
-    },
-  );
-  return stdout;
+async function scrapeLinkedInWithJobSpy(searchSources, args) {
+  if (!searchSources.length) return [];
+
+  const helperConfig = {
+    searches: searchSources.map((source) => source.search),
+    sourceUrls: Object.fromEntries(searchSources.map((source) => [source.search, source.sourceUrl])),
+    resultsWanted: Math.max(args.maxPages, 1) * 25,
+    debug: args.debug,
+  };
+  const helperPath = fileURLToPath(new URL('./jobspy_bridge.py', import.meta.url));
+  const python = process.env.LINKEDIN_JOBSPY_PYTHON || process.env.PYTHON || 'python3';
+  const timeout = Math.max(args.timeoutMs, 1) * Math.max(searchSources.length, 1);
+  const { stdout, stderr } = await execFileAsync(python, [helperPath, JSON.stringify(helperConfig)], {
+    encoding: 'utf8',
+    maxBuffer: 50 * 1024 * 1024,
+    timeout,
+  });
+
+  if (args.debug && stderr) process.stderr.write(stderr);
+
+  try {
+    const rows = JSON.parse(stdout || '[]');
+    return rows.map((row) => jobSpyRowToJob(row));
+  } catch (error) {
+    throw new Error(`JobSpy returned invalid JSON: ${error.message}`);
+  }
 }
 
-function collectJobsFromHtml(html, sourceUrl, debug = false) {
+function jobSpyRowToJob(row) {
   const scrapedAt = new Date().toISOString();
-  const cards = html.match(/<div[^>]+base-search-card[\s\S]*?(?=<\/li>|<li>|$)/gi) || [];
-  const jobs = [];
-  const seenUrls = new Set();
-
-  for (const card of cards) {
-    const title = cleanHtmlText(matchText(card, /<h3[^>]*base-search-card__title[^>]*>([\s\S]*?)<\/h3>/i));
-    const company = cleanHtmlText(matchText(card, /<h4[^>]*base-search-card__subtitle[^>]*>([\s\S]*?)<\/h4>/i));
-    const location = cleanHtmlText(matchText(card, /<span[^>]*job-search-card__location[^>]*>([\s\S]*?)<\/span>/i));
-    const rawUrl =
-      decodeHtml(matchText(card, /<a[^>]+base-card__full-link[^>]+href=["']([^"']+)["']/i)) ||
-      decodeHtml(matchText(card, /href=["']([^"']*\/jobs\/view\/[^"']+)["']/i));
-    const postedAt = dateTextToIso(matchText(card, /<time[^>]+datetime=["']([^"']+)["']/i));
-
-    if (!title || !rawUrl) continue;
-    const url = cleanJobUrl(rawUrl);
-    if (seenUrls.has(url)) continue;
-    seenUrls.add(url);
-
-    const listingText = cleanHtmlText(card);
-    jobs.push({
-      title,
-      company,
-      location: location || 'Remote',
-      postedAt,
-      url,
-      source: 'LinkedIn',
-      sourceUrl,
-      scrapedAt,
-      description: '',
-      listingText,
-    });
-  }
-
-  if (debug) console.log(`Detected ${jobs.length} LinkedIn jobs on ${sourceUrl}`);
-  return filterJobsPostedWithinLast24Hours(filterExcludedEngineeringRoles(jobs));
-}
-
-function collectDescriptionFromDetailHtml(html) {
-  const description =
-    matchText(
-      html,
-      /<div[^>]*show-more-less-html__markup[^>]*>([\s\S]*?)<\/div>\s*(?:<\/section>|<button)/i,
-    ) || matchText(html, /<meta\s+name=["']description["']\s+content=["']([^"']+)["']/i);
-  return cleanHtmlText(description);
-}
-
-function collectCanonicalUrlFromHtml(html) {
-  const canonicalUrl =
-    matchText(html, /<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']/i) ||
-    matchText(html, /<meta[^>]+property=["']og:url["'][^>]+content=["']([^"']+)["']/i) ||
-    matchText(html, /<meta[^>]+name=["']og:url["'][^>]+content=["']([^"']+)["']/i);
-
-  return canonicalUrl ? cleanJobUrl(canonicalUrl) : '';
-}
-
-async function scrapeDescription(job, args) {
-  try {
-    const html = await fetchHtml(job.url, args.timeoutMs);
-    const description = collectDescriptionFromDetailHtml(html);
-    const detailUrl = collectCanonicalUrlFromHtml(html);
-    const updatedJob = detailUrl ? { ...job, url: detailUrl } : job;
-
-    if (!description) return updatedJob;
-    return {
-      ...updatedJob,
+  const description = cleanWhitespace(row.description || '');
+  const listingText = cleanWhitespace(
+    [
+      row.title,
+      row.company,
+      row.location,
+      row.job_type,
+      row.job_level,
+      row.job_function,
+      row.company_industry,
       description,
-      listingText: cleanWhitespace([updatedJob.listingText, description].filter(Boolean).join(' ')),
-    };
-  } catch (error) {
-    console.warn(`LinkedIn detail scrape skipped for ${job.url}: ${error.message}`);
-    return job;
-  }
+    ]
+      .filter(Boolean)
+      .join(' '),
+  );
+
+  return {
+    title: cleanWhitespace(row.title),
+    company: cleanWhitespace(row.company),
+    location: cleanWhitespace(row.location || (row.is_remote ? 'Remote' : '')),
+    postedAt: jobSpyDateToIso(row.date_posted, scrapedAt),
+    description,
+    url: row.job_url_direct ? cleanWhitespace(row.job_url_direct) : cleanJobUrl(row.job_url),
+    source: 'LinkedIn',
+    sourceUrl: row.source_url || '',
+    scrapedAt,
+    listingText,
+  };
 }
 
-async function mapWithConcurrency(items, concurrency, mapper) {
-  const results = new Array(items.length);
-  let nextIndex = 0;
-
-  async function worker() {
-    while (nextIndex < items.length) {
-      const currentIndex = nextIndex;
-      nextIndex += 1;
-      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
-    }
-  }
-
-  const workerCount = Math.min(Math.max(concurrency, 1), items.length);
-  await Promise.all(Array.from({ length: workerCount }, worker));
-  return results;
-}
-
-async function enrichDescriptions(jobs, args) {
-  if (!jobs.length) return jobs;
-  return mapWithConcurrency(jobs, args.detailConcurrency, (job) => scrapeDescription(job, args));
-}
-
-function matchText(block, pattern) {
-  const match = block.match(pattern);
-  return match ? match[1] : '';
+function jobSpyDateToIso(value, fallback) {
+  if (!value) return fallback;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(value))) return fallback;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? fallback : parsed.toISOString();
 }
 
 function cleanJobUrl(value) {
@@ -395,54 +292,17 @@ function cleanJobUrl(value) {
   return url.toString();
 }
 
-function dateTextToIso(value) {
-  if (!value) return '';
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString();
-}
-
-async function scrapeSourceUrl(sourceUrl, args) {
-  const jobs = [];
-  const seenUrls = new Set();
-  const maxPages = Math.max(args.maxPages, 1);
-
-  for (let pageNumber = 1; pageNumber <= maxPages; pageNumber += 1) {
-    const currentUrl = pageUrl(sourceUrl, pageNumber);
-    const html = await fetchHtml(currentUrl, args.timeoutMs);
-    const pageJobs = collectJobsFromHtml(html, currentUrl, args.debug);
-    if (!pageJobs.length && pageNumber > 1) break;
-
-    for (const job of pageJobs) {
-      if (seenUrls.has(job.url)) continue;
-      seenUrls.add(job.url);
-      jobs.push(job);
-      if (args.limit > 0 && jobs.length >= args.limit) return jobs;
-    }
-  }
-
-  return enrichDescriptions(jobs, args);
-}
-
 async function scrapeLinkedIn(args) {
-  const sourceUrls = await resolveSourceUrls(args);
+  const searchSources = await resolveSearchSources(args);
+  const sourceJobs = await scrapeLinkedInWithJobSpy(searchSources, args);
   const allJobs = [];
   const seenUrls = new Set();
 
-  for (const sourceUrl of sourceUrls) {
-    let sourceJobs = [];
-    try {
-      sourceJobs = await scrapeSourceUrl(sourceUrl, args);
-    } catch (error) {
-      console.warn(`LinkedIn scrape failed for ${sourceUrl}: ${error.message}`);
-      continue;
-    }
-
-    for (const job of sourceJobs) {
-      if (seenUrls.has(job.url)) continue;
-      seenUrls.add(job.url);
-      allJobs.push(job);
-      if (args.limit > 0 && allJobs.length >= args.limit) return allJobs;
-    }
+  for (const job of filterJobsPostedWithinLast24Hours(filterExcludedEngineeringRoles(sourceJobs))) {
+    if (!job.title || !job.url || seenUrls.has(job.url)) continue;
+    seenUrls.add(job.url);
+    allJobs.push(job);
+    if (args.limit > 0 && allJobs.length >= args.limit) return allJobs;
   }
 
   return allJobs;

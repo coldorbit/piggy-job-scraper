@@ -1,12 +1,15 @@
 WATCH_INTERVAL_MINUTES ?= 5
 JOBRIGHT_MAX_SCROLLS ?= 30
 REMOTEHUNTER_MAX_SCROLLS ?= 10
+PYTHON ?= python3
+LINKEDIN_JOBSPY_PYTHON ?= $(PYTHON)
 
-.PHONY: help install-browsers scrape scrape-jobright scrape-linkedin scrape-builtin scrape-simplify scrape-diversityjobs scrape-remoteyeah scrape-remotehunter scrape-hiringcafe watch watch-jobright watch-linkedin watch-builtin watch-simplify watch-diversityjobs watch-remoteyeah watch-remotehunter watch-hiringcafe docker-build docker-scrape docker-watch docker-down
+.PHONY: help install-browsers install-python scrape scrape-jobright scrape-linkedin scrape-builtin scrape-simplify scrape-diversityjobs scrape-remoteyeah scrape-remotehunter scrape-hiringcafe watch watch-jobright watch-linkedin watch-builtin watch-simplify watch-diversityjobs watch-remoteyeah watch-remotehunter watch-hiringcafe docker-build docker-scrape docker-watch docker-down
 
 help:
 	@printf '%s\n' \
 		'Targets:' \
+		'  make install-python   Install Python deps for LinkedIn JobSpy scraper' \
 		'  make watch            Watch all sources in parallel' \
 		'  make scrape           Scrape all sources once' \
 		'  make docker-build     Build the Docker image' \
@@ -17,13 +20,16 @@ help:
 install-browsers:
 	pnpm install:browsers
 
+install-python:
+	$(PYTHON) -m pip install -r requirements.txt
+
 scrape: scrape-jobright scrape-linkedin scrape-builtin scrape-simplify scrape-diversityjobs scrape-remoteyeah scrape-remotehunter scrape-hiringcafe
 
 scrape-jobright:
 	pnpm jobright:scrape -- --max-scrolls $(JOBRIGHT_MAX_SCROLLS)
 
 scrape-linkedin:
-	pnpm linkedin:scrape
+	LINKEDIN_JOBSPY_PYTHON=$(LINKEDIN_JOBSPY_PYTHON) pnpm linkedin:scrape
 
 scrape-builtin:
 	pnpm builtin:scrape
@@ -50,7 +56,7 @@ watch-jobright:
 	node sites/jobright/scraper.js --watch --watch-interval-minutes $(WATCH_INTERVAL_MINUTES) --max-scrolls $(JOBRIGHT_MAX_SCROLLS)
 
 watch-linkedin:
-	node sites/linkedin/scraper.js --watch --watch-interval-minutes $(WATCH_INTERVAL_MINUTES)
+	LINKEDIN_JOBSPY_PYTHON=$(LINKEDIN_JOBSPY_PYTHON) node sites/linkedin/scraper.js --watch --watch-interval-minutes $(WATCH_INTERVAL_MINUTES)
 
 watch-builtin:
 	node sites/builtin/scraper.js --watch --watch-interval-minutes $(WATCH_INTERVAL_MINUTES)
