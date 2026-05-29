@@ -162,6 +162,16 @@ function cleanWhitespace(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
+function cleanDescription(value) {
+  return cleanWhitespace(
+    String(value || '')
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/!\[[^\]]*]\([^)]*\)/g, ' ')
+      .replace(/\[([^\]]+)]\([^)]*\)/g, '$1')
+      .replace(/[*_`>#-]+/g, ' '),
+  );
+}
+
 function csvEscape(value) {
   const text = String(value ?? '');
   return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
@@ -249,7 +259,7 @@ async function scrapeLinkedInWithJobSpy(searchSources, args) {
 
 function jobSpyRowToJob(row) {
   const scrapedAt = new Date().toISOString();
-  const description = cleanWhitespace(row.description || '');
+  const description = cleanDescription(row.description);
   const listingText = cleanWhitespace(
     [
       row.title,

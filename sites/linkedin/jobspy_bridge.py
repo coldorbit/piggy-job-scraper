@@ -52,7 +52,7 @@ def main():
                 is_remote=True,
                 results_wanted=results_wanted,
                 hours_old=24,
-                description_format="plain",
+                description_format="markdown",
                 linkedin_fetch_description=True,
                 verbose=verbose,
             )
