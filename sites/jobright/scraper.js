@@ -336,16 +336,20 @@ async function collectListingJobs(page, sourceUrl, debug = false, seenUrls = new
     anchors.map((anchor) => {
       let cardRoot = anchor;
       let current = anchor;
-      for (let depth = 0; current?.parentElement && depth < 5; depth += 1) {
-        current = current.parentElement;
+      for (let depth = 0; current && depth < 6; depth += 1) {
         const text = current.innerText || current.textContent || '';
-        if (/apply/i.test(text) && current.querySelector("a[href*='/jobs/info/']")) {
+        const jobLinkCount =
+          (current.matches?.("a[href*='/jobs/info/']") ? 1 : 0) +
+          current.querySelectorAll("a[href*='/jobs/info/']").length;
+        if (/apply/i.test(text) && jobLinkCount <= 1) {
           cardRoot = current;
           break;
         }
+        current = current.parentElement;
       }
 
-      const actionTexts = Array.from(cardRoot.querySelectorAll('button, a, [role="button"]'))
+      const actionsRoot = cardRoot.querySelector('[class*="actions" i]') || cardRoot;
+      const actionTexts = Array.from(actionsRoot.querySelectorAll('button, a, [role="button"]'))
         .map((node) => (node.innerText || node.textContent || node.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim())
         .filter((text) => /\bapply\b/i.test(text));
 
