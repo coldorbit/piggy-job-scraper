@@ -20,6 +20,7 @@ const DEFAULT_JOBRIGHT_SEARCHES = [
 ];
 const DEFAULT_JOBRIGHT_URLS = DEFAULT_JOBRIGHT_SEARCHES.map(searchToJobrightUrl);
 const APPLY_WITH_AUTOFILL_PATTERN = /\bapply\b.{0,40}\bauto\s*fill\b/i;
+const APPLY_NOW_PATTERN = /\bapply\s+now\b/i;
 const OUTPUT_FIELDS = [
   'title',
   'company',
@@ -247,6 +248,11 @@ function hasApplyWithAutofill(text) {
   return APPLY_WITH_AUTOFILL_PATTERN.test(cleanWhitespace(text));
 }
 
+function hasApplyNowOnly(text) {
+  const normalized = cleanWhitespace(text);
+  return APPLY_NOW_PATTERN.test(normalized);
+}
+
 function parseCardText(text) {
   const lines = cleanLines(text);
   let compact = lines.join(' ');
@@ -327,30 +333,58 @@ async function collectListingJobs(page, sourceUrl, debug = false, seenUrls = new
   const now = new Date();
   const scrapedAt = now.toISOString();
   const cards = await page.locator("a[href*='/jobs/info/']").evaluateAll((anchors) =>
-    anchors.map((anchor) => ({
-      href: anchor.getAttribute('href') || '',
-      text: anchor.innerText || anchor.textContent || '',
-      title:
-        anchor.querySelector('h2')?.textContent?.trim() ||
-        anchor.querySelector('[class*="title" i]')?.textContent?.trim() ||
-        '',
-      company:
-        anchor.querySelector('[class*="company-name" i]')?.textContent?.trim() ||
-        anchor.querySelector('[class*="company" i]')?.textContent?.trim() ||
-        '',
-      postedText:
-        anchor.querySelector('[class*="publish-time" i]')?.textContent?.trim() ||
-        anchor.querySelector('[class*="time" i]')?.textContent?.trim() ||
-        '',
-      location:
-        anchor.querySelector('img[alt="position"]')?.parentElement?.textContent?.trim() ||
-        anchor.querySelector('[class*="location" i]')?.textContent?.trim() ||
-        '',
-      workMode:
-        anchor.querySelector('img[alt="remote"]')?.parentElement?.textContent?.trim() ||
-        anchor.querySelector('[class*="remote" i]')?.textContent?.trim() ||
-        '',
-    })),
+    anchors.map((anchor) => {
+      let cardRoot = anchor;
+      let current = anchor;
+      for (let depth = 0; current?.parentElement && depth < 5; depth += 1) {
+        current = current.parentElement;
+        const text = current.innerText || current.textContent || '';
+        if (/apply/i.test(text) && current.querySelector("a[href*='/jobs/info/']")) {
+          cardRoot = current;
+          break;
+        }
+      }
+
+      const actionTexts = Array.from(cardRoot.querySelectorAll('button, a, [role="button"]'))
+        .map((node) => (node.innerText || node.textContent || node.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim())
+        .filter((text) => /\bapply\b/i.test(text));
+
+      return {
+        href: anchor.getAttribute('href') || '',
+        text: cardRoot.innerText || cardRoot.textContent || anchor.innerText || anchor.textContent || '',
+        actionText: actionTexts.join(' | '),
+        title:
+          cardRoot.querySelector('h2')?.textContent?.trim() ||
+          cardRoot.querySelector('[class*="title" i]')?.textContent?.trim() ||
+          anchor.querySelector('h2')?.textContent?.trim() ||
+          anchor.querySelector('[class*="title" i]')?.textContent?.trim() ||
+          '',
+        company:
+          cardRoot.querySelector('[class*="company-name" i]')?.textContent?.trim() ||
+          cardRoot.querySelector('[class*="company" i]')?.textContent?.trim() ||
+          anchor.querySelector('[class*="company-name" i]')?.textContent?.trim() ||
+          anchor.querySelector('[class*="company" i]')?.textContent?.trim() ||
+          '',
+        postedText:
+          cardRoot.querySelector('[class*="publish-time" i]')?.textContent?.trim() ||
+          cardRoot.querySelector('[class*="time" i]')?.textContent?.trim() ||
+          anchor.querySelector('[class*="publish-time" i]')?.textContent?.trim() ||
+          anchor.querySelector('[class*="time" i]')?.textContent?.trim() ||
+          '',
+        location:
+          cardRoot.querySelector('img[alt="position"]')?.parentElement?.textContent?.trim() ||
+          cardRoot.querySelector('[class*="location" i]')?.textContent?.trim() ||
+          anchor.querySelector('img[alt="position"]')?.parentElement?.textContent?.trim() ||
+          anchor.querySelector('[class*="location" i]')?.textContent?.trim() ||
+          '',
+        workMode:
+          cardRoot.querySelector('img[alt="remote"]')?.parentElement?.textContent?.trim() ||
+          cardRoot.querySelector('[class*="remote" i]')?.textContent?.trim() ||
+          anchor.querySelector('img[alt="remote"]')?.parentElement?.textContent?.trim() ||
+          anchor.querySelector('[class*="remote" i]')?.textContent?.trim() ||
+          '',
+      };
+    }),
   );
   const jobs = [];
 
@@ -367,6 +401,11 @@ async function collectListingJobs(page, sourceUrl, debug = false, seenUrls = new
     const listingText = cleanWhitespace(card.text);
     if (!listingText) continue;
     if (debug && seenUrls.size <= 5) console.log(`Card ${seenUrls.size}: ${listingText.slice(0, 300)}`);
+
+    if (hasApplyNowOnly(card.actionText)) {
+      if (debug) console.log(`Skipping Jobright Apply Now card: ${url}`);
+      continue;
+    }
 
     const parsed = mergeNonEmpty(parseCardText(listingText), card);
     const filterText = [listingText, parsed.location, parsed.workMode].filter(Boolean).join(' ');
@@ -387,6 +426,7 @@ async function collectListingJobs(page, sourceUrl, debug = false, seenUrls = new
       scrapedAt,
       description: '',
       listingText,
+      applyMode: 'Apply with Autofill',
     });
   }
 
@@ -557,7 +597,8 @@ async function inspectJobDetail(context, job, options) {
       return null;
     }
 
-    job.applyMode = hasAutofillAction || hasApplyWithAutofill(detailText) ? 'Apply with Autofill' : '';
+    job.applyMode =
+      job.applyMode || hasAutofillAction || hasApplyWithAutofill(detailText) ? 'Apply with Autofill' : '';
     if (!job.applyMode) {
       if (debug) console.log(`Skipping Jobright job without Apply with Autofill: ${job.url}`);
       return null;

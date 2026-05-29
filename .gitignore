@@ -13,3 +13,7 @@ results/**/*
 *-jobs.json
 *-jobs.csv
 *-seen-jobs.json
+
+__pycache__/
+*.py[cod]
+*$py.class

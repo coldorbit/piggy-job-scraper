@@ -4,7 +4,7 @@ REMOTEHUNTER_MAX_SCROLLS ?= 10
 PYTHON ?= python3
 LINKEDIN_JOBSPY_PYTHON ?= $(PYTHON)
 
-.PHONY: help install-browsers install-python scrape scrape-jobright scrape-linkedin scrape-builtin scrape-simplify scrape-diversityjobs scrape-remoteyeah scrape-remotehunter scrape-hiringcafe watch watch-jobright watch-linkedin watch-builtin watch-simplify watch-diversityjobs watch-remoteyeah watch-remotehunter watch-hiringcafe docker-build docker-scrape docker-watch docker-down
+.PHONY: help install-browsers install-python scrape scrape-jobright scrape-linkedin scrape-builtin scrape-simplify scrape-diversityjobs scrape-remoteyeah scrape-remotehunter scrape-hiringcafe backfill-linkedin-direct-urls watch watch-jobright watch-linkedin watch-builtin watch-simplify watch-diversityjobs watch-remoteyeah watch-remotehunter watch-hiringcafe docker-build docker-scrape docker-watch docker-down
 
 help:
 	@printf '%s\n' \
@@ -12,6 +12,7 @@ help:
 		'  make install-python   Install Python deps for LinkedIn JobSpy scraper' \
 		'  make watch            Watch all sources in parallel' \
 		'  make scrape           Scrape all sources once' \
+		'  make backfill-linkedin-direct-urls' \
 		'  make docker-build     Build the Docker image' \
 		'  make docker-scrape    Run all scrapers once in Docker' \
 		'  make docker-watch     Watch all sources in Docker' \
@@ -48,6 +49,9 @@ scrape-remotehunter:
 
 scrape-hiringcafe:
 	pnpm hiringcafe:scrape
+
+backfill-linkedin-direct-urls:
+	LINKEDIN_JOBSPY_PYTHON=$(LINKEDIN_JOBSPY_PYTHON) pnpm linkedin:backfill-direct-urls
 
 watch:
 	$(MAKE) -j8 watch-jobright watch-linkedin watch-builtin watch-simplify watch-diversityjobs watch-remoteyeah watch-remotehunter watch-hiringcafe

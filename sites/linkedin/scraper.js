@@ -236,16 +236,24 @@ async function scrapeLinkedInWithJobSpy(searchSources, args) {
     searches: searchSources.map((source) => source.search),
     sourceUrls: Object.fromEntries(searchSources.map((source) => [source.search, source.sourceUrl])),
     resultsWanted: Math.max(args.maxPages, 1) * 25,
+    hoursOld: 24,
     debug: args.debug,
   };
   const helperPath = fileURLToPath(new URL('./jobspy_bridge.py', import.meta.url));
   const python = process.env.LINKEDIN_JOBSPY_PYTHON || process.env.PYTHON || 'python3';
   const timeout = Math.max(args.timeoutMs, 1) * Math.max(searchSources.length, 1);
-  const { stdout, stderr } = await execFileAsync(python, [helperPath, JSON.stringify(helperConfig)], {
-    encoding: 'utf8',
-    maxBuffer: 50 * 1024 * 1024,
-    timeout,
-  });
+  let stdout;
+  let stderr;
+  try {
+    ({ stdout, stderr } = await execFileAsync(python, [helperPath, JSON.stringify(helperConfig)], {
+      encoding: 'utf8',
+      maxBuffer: 50 * 1024 * 1024,
+      timeout,
+    }));
+  } catch (error) {
+    const detail = cleanWhitespace(error.stderr || error.stdout || error.message);
+    throw new Error(`JobSpy bridge failed: ${detail}`);
+  }
 
   if (args.debug && stderr) process.stderr.write(stderr);
 

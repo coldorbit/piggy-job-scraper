@@ -11,6 +11,7 @@
     "jobright:scrape": "node sites/jobright/scraper.js",
     "jobright:watch": "node sites/jobright/scraper.js --watch --watch-interval-minutes 5 --max-scrolls 30",
     "linkedin:scrape": "node sites/linkedin/scraper.js",
+    "linkedin:backfill-direct-urls": "node sites/linkedin/backfill_direct_urls.js",
     "linkedin:watch": "node sites/linkedin/scraper.js --watch --watch-interval-minutes 5",
     "builtin:scrape": "node sites/builtin/scraper.js",
     "builtin:watch": "node sites/builtin/scraper.js --watch --watch-interval-minutes 5",

@@ -314,17 +314,12 @@ async function deleteExistingJobrightNonAutofillApplyRows() {
   const [, metadata] = await getSequelize().query(`
     DELETE FROM scraped_jobs
     WHERE lower(source) = 'jobright'
-      AND (
-        COALESCE(raw_job ->> 'listingText', '') ~* 'apply[[:space:]]+now'
-        OR COALESCE(listing_text, '') ~* 'apply[[:space:]]+now'
-      )
-      AND COALESCE(raw_job ->> 'applyMode', '') !~* 'auto[[:space:]]*fill'
-      AND COALESCE(raw_job ->> 'listingText', '') !~* 'apply.{0,40}auto[[:space:]]*fill'
-      AND COALESCE(listing_text, '') !~* 'apply.{0,40}auto[[:space:]]*fill'
+      AND COALESCE(raw_job ->> 'listingText', listing_text, '') ~* 'apply[[:space:]]+now'
+      AND COALESCE(raw_job ->> 'listingText', listing_text, '') !~* 'apply.{0,40}auto[[:space:]]*fill'
   `);
   const deletedCount = Number(metadata?.rowCount || 0);
   if (deletedCount) {
-    console.log(`Deleted ${deletedCount} existing Jobright Apply Now jobs without autofill.`);
+    console.log(`Deleted ${deletedCount} existing Jobright Apply Now-only card jobs.`);
   }
 }
 
