@@ -3,7 +3,6 @@ FROM mcr.microsoft.com/playwright:v1.60.0-noble
 WORKDIR /app
 
 ENV NODE_ENV=production
-ENV LINKEDIN_JOBSPY_PYTHON=python3
 
 RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 

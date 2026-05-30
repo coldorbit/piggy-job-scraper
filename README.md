@@ -6,6 +6,7 @@ Standalone deployment project for the site scrapers. It contains only the Node.j
 
 - Node.js 18+
 - pnpm
+- Python 3 with `python-jobspy` dependencies from `requirements.txt`
 - Docker and Docker Compose for EC2 deployment
 - PostgreSQL database and `DATABASE_URL` in `.env`
 
@@ -30,6 +31,7 @@ REMOTEHUNTER_MAX_SCROLLS=10
 
 ```bash
 pnpm install
+python3 -m pip install -r requirements.txt
 pnpm install:browsers
 pnpm scrape
 pnpm watch

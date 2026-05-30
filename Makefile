@@ -30,7 +30,7 @@ scrape-jobright:
 	pnpm jobright:scrape -- --max-scrolls $(JOBRIGHT_MAX_SCROLLS)
 
 scrape-linkedin:
-	LINKEDIN_JOBSPY_PYTHON=$(LINKEDIN_JOBSPY_PYTHON) pnpm linkedin:scrape
+	$(LINKEDIN_JOBSPY_PYTHON) sites/linkedin/scraper.py
 
 scrape-builtin:
 	pnpm builtin:scrape
@@ -60,7 +60,7 @@ watch-jobright:
 	node sites/jobright/scraper.js --watch --watch-interval-minutes $(WATCH_INTERVAL_MINUTES) --max-scrolls $(JOBRIGHT_MAX_SCROLLS)
 
 watch-linkedin:
-	LINKEDIN_JOBSPY_PYTHON=$(LINKEDIN_JOBSPY_PYTHON) node sites/linkedin/scraper.js --watch --watch-interval-minutes $(WATCH_INTERVAL_MINUTES)
+	$(LINKEDIN_JOBSPY_PYTHON) sites/linkedin/scraper.py --watch --watch-interval-minutes $(WATCH_INTERVAL_MINUTES)
 
 watch-builtin:
 	node sites/builtin/scraper.js --watch --watch-interval-minutes $(WATCH_INTERVAL_MINUTES)

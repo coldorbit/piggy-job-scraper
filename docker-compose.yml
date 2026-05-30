@@ -21,8 +21,8 @@ services:
     image: *scraper_image
     build: .
     command:
-      - node
-      - sites/linkedin/scraper.js
+      - python3
+      - sites/linkedin/scraper.py
       - --watch
       - --watch-interval-minutes
       - ${WATCH_INTERVAL_MINUTES:-5}
@@ -125,7 +125,7 @@ services:
       - -c
       - >
         node sites/jobright/scraper.js --max-scrolls "${JOBRIGHT_MAX_SCROLLS:-30}"
-        && node sites/linkedin/scraper.js
+        && python3 sites/linkedin/scraper.py
         && node sites/builtin/scraper.js
         && node sites/simplify/scraper.js
         && node sites/diversityjobs/scraper.js
