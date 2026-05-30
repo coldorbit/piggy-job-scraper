@@ -137,7 +137,6 @@ export async function ensureJobsTable() {
   await ensureDuplicateKeyColumn();
   await ensureHiddenJobColumns();
   await deleteExistingNonEnglishRows();
-  await deleteExistingJobrightNonAutofillApplyRows();
   await backfillRoleFamilies();
   initialized = true;
 }
@@ -308,20 +307,6 @@ async function deleteExistingNonEnglishRows() {
       await ScrapedJob.destroy({ where: { id: { [Op.in]: nonEnglishIds } } });
     }
   } while (rows.length === 1000);
-}
-
-async function deleteExistingJobrightNonAutofillApplyRows() {
-  const [, metadata] = await getSequelize().query(`
-    DELETE FROM scraped_jobs
-    WHERE lower(source) = 'jobright'
-      AND COALESCE(raw_job ->> 'listingText', listing_text, '') ~* 'apply[[:space:]]+now'
-      AND lower(COALESCE(raw_job ->> 'applyMode', '')) <> 'apply with autofill'
-      AND COALESCE(raw_job ->> 'listingText', listing_text, '') !~* 'apply.{0,40}auto[[:space:]]*fill'
-  `);
-  const deletedCount = Number(metadata?.rowCount || 0);
-  if (deletedCount) {
-    console.log(`Deleted ${deletedCount} existing Jobright Apply Now-only card jobs.`);
-  }
 }
 
 async function backfillRoleFamilies() {
