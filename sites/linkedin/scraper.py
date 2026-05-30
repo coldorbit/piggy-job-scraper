@@ -188,14 +188,26 @@ def scrape_linkedin_with_jobspy(search_sources, args):
         except Exception as error:
             print(f"LinkedIn JobSpy scrape failed for {search}: {error}", file=sys.stderr)
             continue
+        skipped_easy_apply = 0
         for row in dataframe_records(dataframe):
             row["source_url"] = source["sourceUrl"]
-            all_jobs.append(jobspy_row_to_job(row))
+            job = jobspy_row_to_job(row)
+            if job:
+                all_jobs.append(job)
+            else:
+                skipped_easy_apply += 1
+        if args.debug and skipped_easy_apply:
+            print(f"Skipped {skipped_easy_apply} LinkedIn Easy Apply/no-direct-url job(s) for {search}.", file=sys.stderr)
     return all_jobs
 
 
 def jobspy_row_to_job(row):
     scraped_at = datetime.now(timezone.utc).isoformat()
+    direct_url = external_direct_job_url(row.get("job_url_direct"))
+    if not direct_url:
+        return None
+
+    linkedin_url = clean_job_url(row.get("job_url"))
     description = clean_description(row.get("description"))
     listing_text = clean_whitespace(" ".join(str(item) for item in [row.get("title"), row.get("company"), row.get("location"), row.get("job_type"), row.get("job_level"), row.get("job_function"), row.get("company_industry"), description] if item))
     return {
@@ -204,11 +216,13 @@ def jobspy_row_to_job(row):
         "location": clean_whitespace(row.get("location") or ("Remote" if row.get("is_remote") else "")),
         "postedAt": jobspy_date_to_iso(row.get("date_posted"), scraped_at),
         "description": description,
-        "url": clean_whitespace(row.get("job_url_direct") or clean_job_url(row.get("job_url"))),
+        "url": direct_url,
         "source": "LinkedIn",
         "sourceUrl": row.get("source_url") or "",
         "scrapedAt": scraped_at,
         "listingText": listing_text,
+        "linkedinUrl": linkedin_url,
+        "applyMode": "External Apply",
     }
 
 
@@ -226,6 +240,19 @@ def clean_job_url(value):
     if not parsed.scheme:
         parsed = urlparse(f"{LINKEDIN_BASE_URL}/{str(value).lstrip('/')}")
     return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
+
+
+def external_direct_job_url(value):
+    url = clean_whitespace(value)
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    hostname = (parsed.hostname or "").lower()
+    if hostname == "linkedin.com" or hostname.endswith(".linkedin.com"):
+        return ""
+    return url
 
 
 def to_datetime(value):
