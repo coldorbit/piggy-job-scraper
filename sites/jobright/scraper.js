@@ -405,10 +405,7 @@ async function collectListingJobs(page, sourceUrl, debug = false, seenUrls = new
     if (!listingText) continue;
     if (debug && seenUrls.size <= 5) console.log(`Card ${seenUrls.size}: ${listingText.slice(0, 300)}`);
 
-    if (!hasApplyWithAutofillAction(card.actionTexts || [])) {
-      if (debug) console.log(`Skipping Jobright Apply Now card: ${url}`);
-      continue;
-    }
+    const hasListingAutofillAction = hasApplyWithAutofillAction(card.actionTexts || []);
 
     const parsed = mergeNonEmpty(parseCardText(listingText), card);
     const filterText = [listingText, parsed.location, parsed.workMode].filter(Boolean).join(' ');
@@ -429,7 +426,7 @@ async function collectListingJobs(page, sourceUrl, debug = false, seenUrls = new
       scrapedAt,
       description: '',
       listingText,
-      applyMode: 'Apply with Autofill',
+      applyMode: hasListingAutofillAction ? 'Apply with Autofill' : '',
     });
   }
 
