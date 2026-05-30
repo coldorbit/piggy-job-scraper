@@ -19,8 +19,7 @@ const DEFAULT_JOBRIGHT_SEARCHES = [
   'data scientist',
 ];
 const DEFAULT_JOBRIGHT_URLS = DEFAULT_JOBRIGHT_SEARCHES.map(searchToJobrightUrl);
-const APPLY_WITH_AUTOFILL_PATTERN = /\bapply\b.{0,40}\bauto\s*fill\b/i;
-const APPLY_NOW_PATTERN = /\bapply\s+now\b/i;
+const APPLY_WITH_AUTOFILL_TEXT = 'apply with autofill';
 const OUTPUT_FIELDS = [
   'title',
   'company',
@@ -245,12 +244,11 @@ function isRemoteUs(text) {
 }
 
 function hasApplyWithAutofill(text) {
-  return APPLY_WITH_AUTOFILL_PATTERN.test(cleanWhitespace(text));
+  return cleanWhitespace(text).toLowerCase() === APPLY_WITH_AUTOFILL_TEXT;
 }
 
-function hasApplyNowOnly(text) {
-  const normalized = cleanWhitespace(text);
-  return APPLY_NOW_PATTERN.test(normalized);
+function hasApplyWithAutofillAction(actions) {
+  return actions.some((text) => hasApplyWithAutofill(text));
 }
 
 function parseCardText(text) {
@@ -357,6 +355,7 @@ async function collectListingJobs(page, sourceUrl, debug = false, seenUrls = new
         href: anchor.getAttribute('href') || '',
         text: cardRoot.innerText || cardRoot.textContent || anchor.innerText || anchor.textContent || '',
         actionText: actionTexts.join(' | '),
+        actionTexts,
         title:
           cardRoot.querySelector('h2')?.textContent?.trim() ||
           cardRoot.querySelector('[class*="title" i]')?.textContent?.trim() ||
@@ -406,7 +405,7 @@ async function collectListingJobs(page, sourceUrl, debug = false, seenUrls = new
     if (!listingText) continue;
     if (debug && seenUrls.size <= 5) console.log(`Card ${seenUrls.size}: ${listingText.slice(0, 300)}`);
 
-    if (hasApplyNowOnly(card.actionText)) {
+    if (!hasApplyWithAutofillAction(card.actionTexts || [])) {
       if (debug) console.log(`Skipping Jobright Apply Now card: ${url}`);
       continue;
     }
@@ -576,7 +575,7 @@ async function visibleApplyActions(page) {
 
 async function hasEligibleAutofillAction(page) {
   const actions = await visibleApplyActions(page).catch(() => []);
-  return actions.some((action) => /\bapply\b.{0,40}\bauto\s*fill\b/i.test(action.text));
+  return actions.some((action) => hasApplyWithAutofill(action.text));
 }
 
 async function inspectJobDetail(context, job, options) {
@@ -588,21 +587,19 @@ async function inspectJobDetail(context, job, options) {
     await waitForQuietPage(page, timeoutMs);
     await maybeAcceptPopups(page);
 
-    const detailText = cleanWhitespace(await page.locator('body').innerText({ timeout: 3000 }).catch(() => ''));
     const hasAutofillAction = await hasEligibleAutofillAction(page);
     const descriptionText = cleanWhitespace(await extractDescriptionFromPage(page).catch(() => ''));
     const languageJob = {
       ...job,
       description: descriptionText || '',
-      listingText: [job.listingText, descriptionText || detailText].filter(Boolean).join(' '),
+      listingText: [job.listingText, descriptionText].filter(Boolean).join(' '),
     };
     if (!isEnglishOnlyJob(languageJob)) {
       if (debug) console.log(`Skipping non-English Jobright job: ${job.url}`);
       return null;
     }
 
-    job.applyMode =
-      job.applyMode || hasAutofillAction || hasApplyWithAutofill(detailText) ? 'Apply with Autofill' : '';
+    job.applyMode = job.applyMode || (hasAutofillAction ? 'Apply with Autofill' : '');
     if (!job.applyMode) {
       if (debug) console.log(`Skipping Jobright job without Apply with Autofill: ${job.url}`);
       return null;

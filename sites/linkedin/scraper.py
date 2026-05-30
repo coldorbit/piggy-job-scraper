@@ -351,6 +351,10 @@ def ensure_jobs_table(conn):
         cur.execute("ALTER TABLE scraped_jobs ADD COLUMN IF NOT EXISTS duplicate_key TEXT")
         cur.execute("ALTER TABLE scraped_jobs ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN NOT NULL DEFAULT FALSE")
         cur.execute("ALTER TABLE scraped_jobs ADD COLUMN IF NOT EXISTS hidden_at TIMESTAMPTZ")
+        cur.execute("ALTER TABLE scraped_jobs ADD COLUMN IF NOT EXISTS first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()")
+        cur.execute("ALTER TABLE scraped_jobs ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()")
+        cur.execute("ALTER TABLE scraped_jobs ALTER COLUMN first_seen_at SET DEFAULT NOW()")
+        cur.execute("ALTER TABLE scraped_jobs ALTER COLUMN updated_at SET DEFAULT NOW()")
 
 
 def save_jobs_to_postgres(jobs):
@@ -371,11 +375,11 @@ def save_jobs_to_postgres(jobs):
                 cur.execute("""
                     INSERT INTO scraped_jobs
                       (url, duplicate_key, source, source_url, title, company, location, category, posted_at,
-                       scraped_at, listing_text, raw_job, is_hidden, updated_at)
+                       scraped_at, listing_text, raw_job, is_hidden, first_seen_at, updated_at)
                     VALUES
                       (%(url)s, %(duplicate_key)s, %(source)s, %(source_url)s, %(title)s, %(company)s,
                        %(location)s, %(category)s, %(posted_at)s, %(scraped_at)s, %(listing_text)s,
-                       %(raw_job)s, FALSE, NOW())
+                       %(raw_job)s, FALSE, %(first_seen_at)s, %(updated_at)s)
                     ON CONFLICT (url) DO NOTHING
                 """, row)
         return {"insertedOrUpdated": len(rows_to_insert), "skippedDuplicates": len(rows) - len(rows_to_insert), "savedUrls": [row["url"] for row in rows_to_insert]}
@@ -389,6 +393,7 @@ def job_to_row(job):
         raise error
 
     tagged = tag_job_role_family(job)
+    now = datetime.now(timezone.utc)
     return {
         "url": tagged.get("url"),
         "duplicate_key": duplicate_key_for_job(tagged),
@@ -399,9 +404,11 @@ def job_to_row(job):
         "location": tagged.get("location") or None,
         "category": tagged.get("roleFamily"),
         "posted_at": to_datetime(tagged.get("postedAt")),
-        "scraped_at": to_datetime(tagged.get("scrapedAt")) or datetime.now(timezone.utc),
+        "scraped_at": to_datetime(tagged.get("scrapedAt")) or now,
         "listing_text": tagged.get("listingText") or tagged.get("description") or None,
         "raw_job": Jsonb(tagged),
+        "first_seen_at": now,
+        "updated_at": now,
     }
 
 
