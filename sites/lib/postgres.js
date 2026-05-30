@@ -315,6 +315,7 @@ async function deleteExistingJobrightNonAutofillApplyRows() {
     DELETE FROM scraped_jobs
     WHERE lower(source) = 'jobright'
       AND COALESCE(raw_job ->> 'listingText', listing_text, '') ~* 'apply[[:space:]]+now'
+      AND lower(COALESCE(raw_job ->> 'applyMode', '')) <> 'apply with autofill'
       AND COALESCE(raw_job ->> 'listingText', listing_text, '') !~* 'apply.{0,40}auto[[:space:]]*fill'
   `);
   const deletedCount = Number(metadata?.rowCount || 0);
