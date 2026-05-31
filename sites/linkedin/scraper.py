@@ -176,6 +176,7 @@ def scrape_linkedin_with_jobspy(search_sources, args):
     all_jobs = []
     for source in search_sources:
         search = source["search"]
+        print(f"Scraping LinkedIn search: {search}", flush=True)
         scrape_kwargs = {
             "site_name": "linkedin",
             "search_term": search,
@@ -193,26 +194,28 @@ def scrape_linkedin_with_jobspy(search_sources, args):
         except Exception as error:
             print(f"LinkedIn JobSpy scrape failed for {search}: {error}", file=sys.stderr)
             continue
-        skipped_easy_apply = 0
+        skipped_missing_url = 0
         for row in dataframe_records(dataframe):
             row["source_url"] = source["sourceUrl"]
             job = jobspy_row_to_job(row)
             if job:
                 all_jobs.append(job)
             else:
-                skipped_easy_apply += 1
-        if args.debug and skipped_easy_apply:
-            print(f"Skipped {skipped_easy_apply} LinkedIn Easy Apply/no-direct-url job(s) for {search}.", file=sys.stderr)
+                skipped_missing_url += 1
+        if args.debug and skipped_missing_url:
+            print(f"Skipped {skipped_missing_url} LinkedIn job(s) without any usable URL for {search}.", file=sys.stderr, flush=True)
+        print(f"LinkedIn search returned {len(all_jobs)} candidate job(s) so far.", flush=True)
     return all_jobs
 
 
 def jobspy_row_to_job(row):
     scraped_at = datetime.now(timezone.utc).isoformat()
     direct_url = external_direct_job_url(row.get("job_url_direct"))
-    if not direct_url:
+    linkedin_url = clean_job_url(row.get("job_url"))
+    job_url = direct_url or linkedin_url
+    if not job_url:
         return None
 
-    linkedin_url = clean_job_url(row.get("job_url"))
     description = clean_description(row.get("description"))
     listing_text = clean_whitespace(" ".join(str(item) for item in [row.get("title"), row.get("company"), row.get("location"), row.get("job_type"), row.get("job_level"), row.get("job_function"), row.get("company_industry"), description] if item))
     return {
@@ -221,13 +224,13 @@ def jobspy_row_to_job(row):
         "location": clean_whitespace(row.get("location") or ("Remote" if row.get("is_remote") else "")),
         "postedAt": jobspy_date_to_iso(row.get("date_posted"), scraped_at),
         "description": description,
-        "url": direct_url,
+        "url": job_url,
         "source": "LinkedIn",
         "sourceUrl": row.get("source_url") or "",
         "scrapedAt": scraped_at,
         "listingText": listing_text,
         "linkedinUrl": linkedin_url,
-        "applyMode": "External Apply",
+        "applyMode": "External Apply" if direct_url else "LinkedIn Apply",
     }
 
 
