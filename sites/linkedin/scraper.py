@@ -546,20 +546,20 @@ def post_new_jobs_to_slack(jobs, args):
 
 def run_scraper(args):
     jobs = scrape_linkedin(args)
-    print(f"Found {len(jobs)} LinkedIn jobs posted within the last 24 hours.")
+    print(f"Found {len(jobs)} LinkedIn jobs posted within the last 24 hours.", flush=True)
     save_json(args.output_json, jobs)
     save_csv(args.output_csv, jobs)
     result = save_jobs_to_postgres(jobs)
-    print(f"Saved {result.get('insertedOrUpdated', 0)} LinkedIn jobs to PostgreSQL.")
+    print(f"Saved {result.get('insertedOrUpdated', 0)} LinkedIn jobs to PostgreSQL.", flush=True)
     new_jobs = [job for job in jobs if job.get("url") in set(result.get("savedUrls") or [])]
     if args.slack_webhook_url:
         try:
             post_new_jobs_to_slack(new_jobs, args)
-            print(f"Posted {len(new_jobs)} new jobs to Slack.")
+            print(f"Posted {len(new_jobs)} new jobs to Slack.", flush=True)
         except Exception as error:
-            print(f"Slack post failed: {error}", file=sys.stderr)
+            print(f"Slack post failed: {error}", file=sys.stderr, flush=True)
     else:
-        print("Slack webhook not configured; skipping Slack post.")
+        print("Slack webhook not configured; skipping Slack post.", flush=True)
     return jobs
 
 
@@ -570,17 +570,20 @@ def watch_scraper(args):
     def stop(_signum, _frame):
         nonlocal should_stop
         should_stop = True
-        print("\nStopping LinkedIn watch mode after the current wait/run finishes.")
+        print("\nStopping LinkedIn watch mode after the current wait/run finishes.", flush=True)
 
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
-    print(f"Watching LinkedIn every {round(interval_seconds / 60)} minute(s). Press Ctrl+C to stop.")
+    print(f"Watching LinkedIn every {round(interval_seconds / 60)} minute(s). Press Ctrl+C to stop.", flush=True)
     while not should_stop:
-        print(f"\n[{datetime.now(timezone.utc).isoformat()}] Checking LinkedIn for new jobs...")
+        print(f"\n[{datetime.now(timezone.utc).isoformat()}] Checking LinkedIn for new jobs...", flush=True)
         try:
             run_scraper(args)
         except Exception as error:
-            print(f"Watch run failed: {error}", file=sys.stderr)
+            print(f"Watch run failed: {error}", file=sys.stderr, flush=True)
+        if not should_stop:
+            next_run = datetime.now(timezone.utc) + timedelta(seconds=interval_seconds)
+            print(f"Next LinkedIn check at {next_run.isoformat()}.", flush=True)
         for _ in range(interval_seconds):
             if should_stop:
                 break

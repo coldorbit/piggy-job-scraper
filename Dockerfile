@@ -2,7 +2,8 @@ FROM mcr.microsoft.com/playwright:v1.60.0-noble
 
 WORKDIR /app
 
-ENV NODE_ENV=production
+ENV NODE_ENV=production \
+    PYTHONUNBUFFERED=1
 
 RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 
