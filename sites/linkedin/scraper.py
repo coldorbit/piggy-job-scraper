@@ -50,6 +50,7 @@ DISALLOWED_WORKPLACE_PATTERN = re.compile(
     r"\b(?:hybrid|on[\s-]?site|in[\s-]?office|office[\s-]?based|work\s+from\s+(?:the\s+)?office)\b",
     re.I,
 )
+LINKEDIN_CLOSED_APPLICATION_PATTERN = re.compile(r"\bno\s+longer\s+accepting\s+applications\b", re.I)
 ENGLISH_SIGNAL_WORDS = {
     "a", "an", "and", "are", "as", "at", "be", "build", "by", "code", "collaborate", "data", "design", "develop",
     "engineer", "experience", "for", "from", "in", "is", "maintain", "of", "on", "or", "our", "product", "remote",
@@ -291,6 +292,11 @@ def is_onsite_or_hybrid_role(job):
     return bool(DISALLOWED_WORKPLACE_PATTERN.search(text))
 
 
+def is_closed_linkedin_listing(job):
+    text = clean_whitespace(" ".join(str(job.get(key) or "") for key in ["listingText", "description"]))
+    return bool(LINKEDIN_CLOSED_APPLICATION_PATTERN.search(text))
+
+
 def is_english_only_job(job):
     text = clean_whitespace(" ".join(str(job.get(key) or "") for key in ["title", "company", "location", "category", "jobCategory", "description", "listingText"]))
     if not text:
@@ -332,7 +338,7 @@ def scrape_linkedin(args):
     seen_urls = set()
     now = datetime.now(timezone.utc)
     for job in scrape_linkedin_with_jobspy(resolve_search_sources(args), args):
-        if is_excluded_engineering_role(job) or is_onsite_or_hybrid_role(job) or not is_within_last_24_hours(job.get("postedAt"), now):
+        if is_closed_linkedin_listing(job) or is_excluded_engineering_role(job) or not is_within_last_24_hours(job.get("postedAt"), now):
             continue
         if not job.get("title") or not job.get("url") or job["url"] in seen_urls:
             continue
