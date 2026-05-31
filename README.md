@@ -27,6 +27,13 @@ JOBRIGHT_MAX_SCROLLS=30
 REMOTEHUNTER_MAX_SCROLLS=10
 ```
 
+Existing rows are preserved by default during scraper startup. Destructive cleanup can be enabled only when you explicitly intend to prune old data:
+
+```text
+DELETE_EXISTING_DUPLICATE_JOBS=false
+DELETE_EXISTING_NON_ENGLISH_JOBS=false
+```
+
 ## Local Usage
 
 ```bash
@@ -131,4 +138,4 @@ docker compose version
 docker ps
 ```
 
-Scraped jobs are inserted into PostgreSQL table `scraped_jobs`. Duplicate detection is handled by PostgreSQL using the scraper's duplicate key logic.
+Scraped jobs are inserted into PostgreSQL table `scraped_jobs`. Duplicate detection is handled by PostgreSQL using the scraper's duplicate key logic, without deleting existing rows during normal runs.

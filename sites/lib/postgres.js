@@ -136,7 +136,7 @@ export async function ensureJobsTable() {
   await getScrapedJobModel().sync();
   await ensureDuplicateKeyColumn();
   await ensureHiddenJobColumns();
-  await deleteExistingNonEnglishRows();
+  await runOptionalExistingRowCleanup();
   await backfillRoleFamilies();
   initialized = true;
 }
@@ -208,7 +208,20 @@ async function ensureDuplicateKeyColumn() {
   }
 
   await backfillDuplicateKeys();
-  await deleteExistingDuplicateRows();
+}
+
+async function runOptionalExistingRowCleanup() {
+  if (envFlag('DELETE_EXISTING_DUPLICATE_JOBS')) {
+    await deleteExistingDuplicateRows();
+  }
+
+  if (envFlag('DELETE_EXISTING_NON_ENGLISH_JOBS')) {
+    await deleteExistingNonEnglishRows();
+  }
+}
+
+function envFlag(name) {
+  return String(process.env[name] || '').toLowerCase() === 'true';
 }
 
 async function ensureHiddenJobColumns() {
