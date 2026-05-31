@@ -46,6 +46,10 @@ NON_ENGLISH_LANGUAGE_REQUIREMENT_PATTERN = re.compile(
     rf"|\b{NON_ENGLISH_LANGUAGES}\b.{{0,60}}\b{LANGUAGE_REQUIREMENT_WORDS}\b",
     re.I,
 )
+DISALLOWED_WORKPLACE_PATTERN = re.compile(
+    r"\b(?:hybrid|on[\s-]?site|in[\s-]?office|office[\s-]?based|work\s+from\s+(?:the\s+)?office)\b",
+    re.I,
+)
 ENGLISH_SIGNAL_WORDS = {
     "a", "an", "and", "are", "as", "at", "be", "build", "by", "code", "collaborate", "data", "design", "develop",
     "engineer", "experience", "for", "from", "in", "is", "maintain", "of", "on", "or", "our", "product", "remote",
@@ -282,6 +286,11 @@ def is_excluded_engineering_role(job):
     return bool(EXCLUDED_ENGINEERING_ROLE_PATTERN.search(title_text) or EXCLUDED_ENGINEERING_ROLE_PATTERN.search(job.get("listingText") or ""))
 
 
+def is_onsite_or_hybrid_role(job):
+    text = clean_whitespace(" ".join(str(job.get(key) or "") for key in ["location", "listingText", "description"]))
+    return bool(DISALLOWED_WORKPLACE_PATTERN.search(text))
+
+
 def is_english_only_job(job):
     text = clean_whitespace(" ".join(str(job.get(key) or "") for key in ["title", "company", "location", "category", "jobCategory", "description", "listingText"]))
     if not text:
@@ -323,7 +332,7 @@ def scrape_linkedin(args):
     seen_urls = set()
     now = datetime.now(timezone.utc)
     for job in scrape_linkedin_with_jobspy(resolve_search_sources(args), args):
-        if is_excluded_engineering_role(job) or not is_within_last_24_hours(job.get("postedAt"), now):
+        if is_excluded_engineering_role(job) or is_onsite_or_hybrid_role(job) or not is_within_last_24_hours(job.get("postedAt"), now):
             continue
         if not job.get("title") or not job.get("url") or job["url"] in seen_urls:
             continue
