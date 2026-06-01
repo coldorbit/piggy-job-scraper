@@ -50,6 +50,9 @@ DISALLOWED_WORKPLACE_PATTERN = re.compile(
     r"\b(?:hybrid|on[\s-]?site|in[\s-]?office|office[\s-]?based|work\s+from\s+(?:the\s+)?office)\b",
     re.I,
 )
+DISALLOWED_WORKPLACE_SQL_PATTERN = (
+    r"(hybrid|on[[:space:]-]?site|in[[:space:]-]?office|office[[:space:]-]?based|work[[:space:]]+from[[:space:]]+(the[[:space:]]+)?office)"
+)
 LINKEDIN_CLOSED_APPLICATION_PATTERN = re.compile(r"\bno\s+longer\s+accepting\s+applications\b", re.I)
 LINKEDIN_HOSTED_APPLY_MODES = {"LinkedIn Apply", "Easy Apply"}
 ENGLISH_SIGNAL_WORDS = {
@@ -421,10 +424,11 @@ def save_jobs_to_postgres(jobs):
         raise error
 
     rows = dedupe_rows([job_to_row(job) for job in jobs if job.get("url") and is_english_only_job(job)])
-    if not rows:
-        return {"insertedOrUpdated": 0, "skippedDuplicates": 0, "savedUrls": []}
     with psycopg.connect(database_url()) as conn:
         ensure_jobs_table(conn)
+        hide_existing_linkedin_disallowed_workplace_rows(conn)
+        if not rows:
+            return {"insertedOrUpdated": 0, "skippedDuplicates": 0, "savedUrls": []}
         rows_to_insert = filter_existing_rows(conn, rows)
         with conn.cursor() as cur:
             for row in rows_to_insert:
@@ -439,6 +443,26 @@ def save_jobs_to_postgres(jobs):
                     ON CONFLICT (url) DO NOTHING
                 """, row)
         return {"insertedOrUpdated": len(rows_to_insert), "skippedDuplicates": len(rows) - len(rows_to_insert), "savedUrls": [row["url"] for row in rows_to_insert]}
+
+
+def hide_existing_linkedin_disallowed_workplace_rows(conn):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+                UPDATE scraped_jobs
+                SET is_hidden = TRUE,
+                    hidden_at = COALESCE(hidden_at, NOW()),
+                    updated_at = NOW()
+                WHERE lower(source) = 'linkedin'
+                  AND is_hidden = FALSE
+                  AND (
+                    COALESCE(location, '') ~* %(pattern)s
+                    OR COALESCE(listing_text, '') ~* %(pattern)s
+                    OR COALESCE(raw_job::text, '') ~* %(pattern)s
+                  )
+            """,
+            {"pattern": DISALLOWED_WORKPLACE_SQL_PATTERN},
+        )
 
 
 def job_to_row(job):
