@@ -51,6 +51,7 @@ DISALLOWED_WORKPLACE_PATTERN = re.compile(
     re.I,
 )
 LINKEDIN_CLOSED_APPLICATION_PATTERN = re.compile(r"\bno\s+longer\s+accepting\s+applications\b", re.I)
+LINKEDIN_HOSTED_APPLY_MODES = {"LinkedIn Apply", "Easy Apply"}
 ENGLISH_SIGNAL_WORDS = {
     "a", "an", "and", "are", "as", "at", "be", "build", "by", "code", "collaborate", "data", "design", "develop",
     "engineer", "experience", "for", "from", "in", "is", "maintain", "of", "on", "or", "our", "product", "remote",
@@ -300,6 +301,10 @@ def is_closed_linkedin_listing(job):
     return bool(LINKEDIN_CLOSED_APPLICATION_PATTERN.search(text))
 
 
+def is_linkedin_hosted_application(job):
+    return job.get("applyMode") in LINKEDIN_HOSTED_APPLY_MODES
+
+
 def is_english_only_job(job):
     text = clean_whitespace(" ".join(str(job.get(key) or "") for key in ["title", "company", "location", "category", "jobCategory", "description", "listingText"]))
     if not text:
@@ -343,6 +348,7 @@ def scrape_linkedin(args):
     for job in scrape_linkedin_with_jobspy(resolve_search_sources(args), args):
         if (
             is_closed_linkedin_listing(job)
+            or is_linkedin_hosted_application(job)
             or is_excluded_engineering_role(job)
             or is_onsite_or_hybrid_role(job)
             or not is_within_last_24_hours(job.get("postedAt"), now)
