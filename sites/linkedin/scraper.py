@@ -341,7 +341,12 @@ def scrape_linkedin(args):
     seen_urls = set()
     now = datetime.now(timezone.utc)
     for job in scrape_linkedin_with_jobspy(resolve_search_sources(args), args):
-        if is_closed_linkedin_listing(job) or is_excluded_engineering_role(job) or not is_within_last_24_hours(job.get("postedAt"), now):
+        if (
+            is_closed_linkedin_listing(job)
+            or is_excluded_engineering_role(job)
+            or is_onsite_or_hybrid_role(job)
+            or not is_within_last_24_hours(job.get("postedAt"), now)
+        ):
             continue
         if not job.get("title") or not job.get("url") or job["url"] in seen_urls:
             continue
