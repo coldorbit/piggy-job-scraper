@@ -28,6 +28,8 @@ DEFAULT_LINKEDIN_SEARCHES = [
     "frontend engineer",
     "data scientist",
 ]
+DEFAULT_LINKEDIN_AI_SEARCH_MODEL = "gpt-4.1-mini"
+DEFAULT_LINKEDIN_AI_SEARCH_LIMIT = 12
 OUTPUT_FIELDS = ["title", "company", "location", "postedAt", "description", "url", "source", "sourceUrl", "scrapedAt", "listingText"]
 EXCLUDED_ENGINEERING_ROLE_PATTERN = re.compile(
     r"\b(?:devops|platform|cloud)\s+(?:engineer|developer|architect|specialist|lead|manager|administrator|consultant)s?\b"
@@ -131,14 +133,24 @@ def parse_args(argv):
     parser.add_argument("--detail-concurrency", type=int, default=3, help="Backward-compatible no-op.")
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--timeout-ms", type=int, default=60000, help="Backward-compatible no-op.")
+    parser.add_argument("--ai-enrich-searches", action="store_true", default=env_bool(os.environ.get("LINKEDIN_AI_ENRICH_SEARCHES")))
+    parser.add_argument("--no-ai-enrich-searches", action="store_true")
+    parser.add_argument("--ai-search-model", default=os.environ.get("LINKEDIN_AI_SEARCH_MODEL", DEFAULT_LINKEDIN_AI_SEARCH_MODEL))
+    parser.add_argument("--ai-search-limit", type=int, default=int(os.environ.get("LINKEDIN_AI_SEARCH_LIMIT", DEFAULT_LINKEDIN_AI_SEARCH_LIMIT)))
     parser.add_argument("--no-slack", action="store_true")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args(argv)
     args.searches = env_list(os.environ.get("LINKEDIN_SEARCHES") or os.environ.get("LINKEDIN_SEARCH")) + args.searches
     args.urls = env_list(os.environ.get("LINKEDIN_URLS")) + args.urls
+    if args.no_ai_enrich_searches:
+        args.ai_enrich_searches = False
     if args.no_slack:
         args.slack_webhook_url = ""
     return args
+
+
+def env_bool(value):
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def read_url_file(path):
@@ -151,9 +163,154 @@ def search_url(search, start=0):
     return f"{LINKEDIN_BASE_URL}/jobs-guest/jobs/api/seeMoreJobPostings/search?{urlencode({'keywords': search, 'location': 'United States', 'f_WT': '2', 'f_TPR': 'r86400', 'start': str(start)})}"
 
 
+def linkedin_search_criteria():
+    return {
+        "must_match": [
+            "remote roles in the United States",
+            "software engineering, data engineering, AI/ML engineering, full-stack, backend, frontend, or data science roles",
+            "posted in the last 24 hours",
+            "external company application URL when available",
+            "English-language listing",
+        ],
+        "exclude": [
+            "Easy Apply or LinkedIn-hosted application-only listings",
+            "hybrid, onsite, in-office, or office-based roles",
+            "DevOps, platform, and cloud-focused engineering roles",
+            "roles requiring non-English fluency",
+            "closed listings that no longer accept applications",
+        ],
+    }
+
+
+def enrich_linkedin_searches_with_ai(searches, args):
+    base_searches = [clean_whitespace(search) for search in searches if clean_whitespace(search)]
+    if not args.ai_enrich_searches:
+        return base_searches
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        print("LINKEDIN_AI_ENRICH_SEARCHES is enabled but OPENAI_API_KEY is not set; using configured LinkedIn searches only.", file=sys.stderr, flush=True)
+        return base_searches
+
+    try:
+        generated_searches = generate_linkedin_searches_with_openai(base_searches, args, api_key)
+    except Exception as error:
+        print(f"LinkedIn AI search enrichment failed: {error}; using configured LinkedIn searches only.", file=sys.stderr, flush=True)
+        return base_searches
+
+    searches = unique_searches([*base_searches, *generated_searches])
+    if args.debug:
+        added = [search for search in searches if search not in set(base_searches)]
+        print(f"LinkedIn AI search enrichment added {len(added)} search term(s): {', '.join(added)}", file=sys.stderr, flush=True)
+    return searches
+
+
+def generate_linkedin_searches_with_openai(searches, args, api_key):
+    limit = max(args.ai_search_limit, 0)
+    if not limit:
+        return []
+
+    prompt = {
+        "task": "Generate concise LinkedIn job search keyword phrases.",
+        "existing_searches": searches,
+        "criteria": linkedin_search_criteria(),
+        "rules": [
+            f"Return at most {limit} new search phrases.",
+            "Use short keyword phrases only, not full Boolean expressions.",
+            "Prefer titles and common title variants likely to find matching roles on LinkedIn.",
+            "Do not include excluded workplace modes or excluded role families.",
+            "Do not include location, remote, United States, posted-date, or apply-mode words; those are handled by scraper filters.",
+            "Avoid duplicates or near-duplicates of existing_searches.",
+        ],
+    }
+    request_body = {
+        "model": args.ai_search_model,
+        "input": [
+            {
+                "role": "developer",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "You expand job-board search keywords while preserving strict scraper criteria. Output only JSON matching the schema.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": json.dumps(prompt, ensure_ascii=False)}],
+            },
+        ],
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "linkedin_search_enrichment",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "searches": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        }
+                    },
+                    "required": ["searches"],
+                },
+            }
+        },
+    }
+    request = Request(
+        "https://api.openai.com/v1/responses",
+        data=json.dumps(request_body).encode("utf-8"),
+        headers={"content-type": "application/json", "authorization": f"Bearer {api_key}"},
+        method="POST",
+    )
+    with urlopen(request, timeout=30) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    content = response_output_text(payload)
+    parsed = json.loads(content)
+    return unique_searches(sanitize_generated_search(search) for search in parsed.get("searches") or [])
+
+
+def response_output_text(payload):
+    for item in payload.get("output") or []:
+        if item.get("type") != "message":
+            continue
+        for content in item.get("content") or []:
+            if content.get("type") == "output_text" and content.get("text"):
+                return content["text"]
+    raise ValueError("OpenAI response did not include output_text")
+
+
+def sanitize_generated_search(value):
+    text = clean_whitespace(value).lower()
+    text = re.sub(r"[^\w\s+/#.-]+", " ", text)
+    text = clean_whitespace(text)
+    if not text or len(text) > 80:
+        return ""
+    if DISALLOWED_WORKPLACE_PATTERN.search(text) or EXCLUDED_ENGINEERING_ROLE_PATTERN.search(text):
+        return ""
+    return text
+
+
+def unique_searches(searches):
+    output = []
+    seen = set()
+    for search in searches:
+        text = clean_whitespace(search)
+        key = text.lower()
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        output.append(text)
+    return output
+
+
 def resolve_search_sources(args):
     urls = [*args.urls, *read_url_file(args.urls_file)]
     searches = args.searches or DEFAULT_LINKEDIN_SEARCHES
+    if not urls:
+        searches = enrich_linkedin_searches_with_ai(searches, args)
     source_urls = list(dict.fromkeys(urls or [search_url(search) for search in searches]))
     search_sources = []
     seen = set()
