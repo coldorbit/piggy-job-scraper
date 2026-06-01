@@ -461,6 +461,7 @@ async function scrapeRemoteYeah(args) {
     timeoutMs: args.timeoutMs,
     concurrency: args.detailConcurrency,
     sourceName: 'RemoteYeah',
+    overwriteDescription: true,
   });
 }
 

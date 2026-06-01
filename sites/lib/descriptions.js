@@ -68,7 +68,7 @@ export async function scrapeJobDescription(job, options = {}) {
   const timeoutMs = options.timeoutMs || 30000;
   const sourceName = options.sourceName || job.source || 'job';
   const url = options.urlForJob ? options.urlForJob(job) : job.url;
-  if (!url || job.description) return job;
+  if (!url || (job.description && !options.overwriteDescription)) return job;
 
   try {
     const html = await fetchHtml(url, timeoutMs, sourceName);

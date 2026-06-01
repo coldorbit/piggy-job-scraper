@@ -6,7 +6,7 @@ import { chromium } from 'playwright';
 import { saveJobsToPostgres } from '../lib/postgres.js';
 import { filterJobsPostedWithinLast24Hours } from '../lib/recency.js';
 import { filterExcludedEngineeringRoles } from '../lib/jobFilters.js';
-import { enrichJobDescriptions } from '../lib/descriptions.js';
+import { cleanHtmlText } from '../lib/descriptions.js';
 
 const REMOTEHUNTER_BASE_URL = 'https://www.remotehunter.com';
 const DEFAULT_REMOTEHUNTER_SEARCHES = [
@@ -168,6 +168,16 @@ function cleanWhitespace(value) {
 function csvEscape(value) {
   const text = String(value ?? '');
   return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+function jobUuidFromUrl(value) {
+  try {
+    const url = new URL(value);
+    const match = url.pathname.match(/\/apply-with-ai\/([^/]+)/i);
+    return match ? decodeURIComponent(match[1]) : '';
+  } catch {
+    return '';
+  }
 }
 
 function searchUrl(search) {
@@ -335,15 +345,62 @@ async function scrapeRemoteHunter(args) {
         if (args.limit > 0 && allJobs.length >= args.limit) return allJobs;
       }
     }
-    return enrichJobDescriptions(allJobs, {
-      timeoutMs: args.timeoutMs,
-      concurrency: args.detailConcurrency,
-      sourceName: 'RemoteHunter',
-    });
+    return enrichRemoteHunterDescriptions(allJobs, args);
   } finally {
     await context.close();
     await browser.close();
   }
+}
+
+async function enrichRemoteHunterDescriptions(jobs, args) {
+  if (!jobs.length) return jobs;
+  return mapWithConcurrency(jobs, args.detailConcurrency, (job) => scrapeRemoteHunterDescription(job, args));
+}
+
+async function scrapeRemoteHunterDescription(job, args) {
+  const jobUuid = jobUuidFromUrl(job.url);
+  if (!jobUuid) return job;
+
+  try {
+    const response = await axios.get(`${REMOTEHUNTER_BASE_URL}/api/jobs/${encodeURIComponent(jobUuid)}`, {
+      timeout: args.timeoutMs,
+      responseType: 'json',
+      headers: {
+        accept: 'application/json',
+        referer: REMOTEHUNTER_BASE_URL,
+        'user-agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+      },
+    });
+    const payload = response.data?.data || response.data;
+    const description = cleanHtmlText(payload?.description_formatted || payload?.description).slice(0, 20000);
+    if (!description) return job;
+    return {
+      ...job,
+      description,
+      listingText: cleanWhitespace([job.listingText, description].filter(Boolean).join(' ')),
+    };
+  } catch (error) {
+    console.warn(`RemoteHunter detail scrape skipped for ${job.url}: ${error.message}`);
+    return job;
+  }
+}
+
+async function mapWithConcurrency(items, concurrency, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  }
+
+  const workerCount = Math.min(Math.max(concurrency, 1), items.length);
+  await Promise.all(Array.from({ length: workerCount }, worker));
+  return results;
 }
 
 async function ensureParentDirectory(path) {
