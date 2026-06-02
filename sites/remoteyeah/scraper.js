@@ -453,11 +453,11 @@ async function scrapeRemoteYeah(args) {
       if (seenUrls.has(job.url)) continue;
       seenUrls.add(job.url);
       allJobs.push(job);
-      if (args.limit > 0 && allJobs.length >= args.limit) return allJobs;
     }
   }
 
-  return enrichJobDescriptions(allJobs, {
+  const limitedJobs = args.limit > 0 ? allJobs.slice(0, args.limit) : allJobs;
+  return enrichJobDescriptions(limitedJobs, {
     timeoutMs: args.timeoutMs,
     concurrency: args.detailConcurrency,
     sourceName: 'RemoteYeah',
