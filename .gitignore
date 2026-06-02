@@ -2,6 +2,7 @@ node_modules/
 playwright-report/
 test-results/
 .jobright-profile/
+.auth/
 data/
 results/*
 results/**/*

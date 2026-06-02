@@ -53,6 +53,7 @@ const DEFAULT_ARGS = {
   timeoutMs: 60000,
   descriptionLimit: 0,
   detailConcurrency: 3,
+  storageState: process.env.JOBRIGHT_STORAGE_STATE || '.auth/jobright.json',
   skipDescriptions: false,
   debug: false,
   headless: true,
@@ -75,6 +76,7 @@ function parseArgs(argv) {
     '--timeout-ms': 'timeoutMs',
     '--description-limit': 'descriptionLimit',
     '--detail-concurrency': 'detailConcurrency',
+    '--storage-state': 'storageState',
   };
   const numericKeys = new Set([
     'limit',
@@ -144,7 +146,7 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`Jobright remote US tech job scraper\n\nUsage:\n  node sites/jobright/scraper.js [options]\n\nOptions:\n  --url URL                  Jobright search page to scrape; repeat for multiple URLs\n  --start-url URL            Backward-compatible alias for a single Jobright search page\n  --urls-file PATH           Text file with one Jobright search URL per line\n  --slack-webhook-url URL    Slack incoming webhook URL, or use SLACK_WEBHOOK_URL\n  --slack-channel NAME       Optional channel override for compatible webhooks\n  --watch                    Keep polling Jobright and posting newly inserted jobs\n  --watch-interval-minutes N Minutes between watch runs, default 5\n  --limit N                  Maximum jobs to save, 0 means no limit\n  --max-scrolls N            Scroll attempts, default 40\n  --scroll-pause-ms N        Delay after each scroll, default 900\n  --timeout-ms N             Playwright timeout, default 60000\n  --description-limit N      Detail pages to open, 0 means all\n  --detail-concurrency N     Detail page concurrency, default 3\n  --skip-descriptions        Do not scrape detail-page descriptions\n  --headless / --no-headless Browser visibility, default headless\n  --no-slack                 Disable Slack posting for this run\n  --debug                    Print card-detection diagnostics\n`);
+  console.log(`Jobright remote US tech job scraper\n\nUsage:\n  node sites/jobright/scraper.js [options]\n\nOptions:\n  --url URL                  Jobright search page to scrape; repeat for multiple URLs\n  --start-url URL            Backward-compatible alias for a single Jobright search page\n  --urls-file PATH           Text file with one Jobright search URL per line\n  --slack-webhook-url URL    Slack incoming webhook URL, or use SLACK_WEBHOOK_URL\n  --slack-channel NAME       Optional channel override for compatible webhooks\n  --watch                    Keep polling Jobright and posting newly inserted jobs\n  --watch-interval-minutes N Minutes between watch runs, default 5\n  --limit N                  Maximum jobs to save, 0 means no limit\n  --max-scrolls N            Scroll attempts, default 40\n  --scroll-pause-ms N        Delay after each scroll, default 900\n  --timeout-ms N             Playwright timeout, default 60000\n  --description-limit N      Detail pages to open, 0 means all\n  --detail-concurrency N     Detail page concurrency, default 3\n  --storage-state PATH       Playwright logged-in storage state, default .auth/jobright.json\n  --skip-descriptions        Do not scrape detail-page descriptions\n  --headless / --no-headless Browser visibility, default headless\n  --no-slack                 Disable Slack posting for this run\n  --debug                    Print card-detection diagnostics\n`);
 }
 
 function envUrls(value) {
@@ -181,6 +183,16 @@ async function readUrlFile(path) {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line && !line.startsWith('#'));
+}
+
+async function existingStorageState(path) {
+  if (!path) return undefined;
+  try {
+    await fs.access(path);
+    return path;
+  } catch {
+    return undefined;
+  }
 }
 
 async function resolveSourceUrls(args) {
@@ -257,13 +269,11 @@ function applyModeFromText(text) {
 }
 
 function applyModeFromActions(actions) {
-  let fallbackApplyMode = '';
   for (const text of actions) {
     const applyMode = applyModeFromText(text);
-    if (applyMode === APPLY_MODE_LABELS[APPLY_NOW_TEXT]) return applyMode;
-    if (applyMode) fallbackApplyMode = applyMode;
+    if (applyMode) return applyMode;
   }
-  return fallbackApplyMode;
+  return '';
 }
 
 function parseCardText(text) {
@@ -481,7 +491,10 @@ async function scrapeJobrightJobs(args, context) {
       await page.goto(sourceUrl, { waitUntil: 'domcontentloaded', timeout: args.timeoutMs });
       await waitForQuietPage(page, args.timeoutMs);
       await maybeAcceptPopups(page);
-      await page.waitForSelector("a[href*='/jobs/info/']", { timeout: args.timeoutMs });
+      await page.waitForFunction(
+        () => document.querySelectorAll("a[href*='/jobs/info/']").length > 0,
+        { timeout: args.timeoutMs },
+      );
 
       const sourceJobs = await scrollAndCollectListingJobs(
         page,
@@ -572,6 +585,13 @@ async function visibleApplyActions(page) {
         const rect = node.getBoundingClientRect();
         const style = window.getComputedStyle(node);
         const text = (node.innerText || node.textContent || node.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+        const classChain = [];
+        let current = node;
+        while (current) {
+          classChain.push(String(current.className || ''));
+          current = current.parentElement;
+        }
+        const classText = classChain.join(' ');
         const visible =
           rect.width > 0 &&
           rect.height > 0 &&
@@ -579,15 +599,23 @@ async function visibleApplyActions(page) {
           style.visibility !== 'hidden' &&
           Number(style.opacity) !== 0;
         const disabled = node.disabled || node.getAttribute('aria-disabled') === 'true';
-        return { text, visible, disabled };
+        const sidebarAutofillPlugin = /auto-fill-section|visitor-tool-sider/i.test(classText);
+        return { text, visible, disabled, sidebarAutofillPlugin };
       })
-      .filter((action) => action.visible && !action.disabled && /\bapply\b/i.test(action.text)),
+      .filter((action) => action.visible && !action.disabled && !action.sidebarAutofillPlugin && /\bapply\b/i.test(action.text)),
   );
 }
 
 async function eligibleApplyMode(page) {
   const actions = await visibleApplyActions(page).catch(() => []);
-  return applyModeFromActions(actions.map((action) => action.text));
+  const actionTexts = actions.map((action) => action.text);
+  if (actionTexts.some((text) => applyModeFromText(text) === APPLY_MODE_LABELS[APPLY_NOW_TEXT])) {
+    return APPLY_MODE_LABELS[APPLY_NOW_TEXT];
+  }
+  if (actionTexts.some((text) => applyModeFromText(text) === APPLY_MODE_LABELS[APPLY_WITH_AUTOFILL_TEXT])) {
+    return APPLY_MODE_LABELS[APPLY_WITH_AUTOFILL_TEXT];
+  }
+  return '';
 }
 
 async function inspectJobDetail(context, job, options) {
@@ -791,10 +819,15 @@ async function runScraper(args) {
     headless: args.headless,
     args: ['--disable-blink-features=AutomationControlled'],
   });
+  const storageState = await existingStorageState(args.storageState);
+  if (args.storageState && !storageState) {
+    console.warn(`Jobright storage state not found at ${args.storageState}; scraping as a guest session.`);
+  }
   const context = await browser.newContext({
     viewport: { width: 1440, height: 1100 },
     userAgent:
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+    ...(storageState ? { storageState } : {}),
   });
   let jobs = [];
   try {
