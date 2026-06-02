@@ -249,15 +249,21 @@ function isRemoteUs(text) {
 }
 
 function applyModeFromText(text) {
-  return APPLY_MODE_LABELS[cleanWhitespace(text).toLowerCase()] || '';
+  const normalized = cleanWhitespace(text).toLowerCase();
+  if (!normalized) return '';
+  if (normalized.includes(APPLY_NOW_TEXT)) return APPLY_MODE_LABELS[APPLY_NOW_TEXT];
+  if (normalized.includes(APPLY_WITH_AUTOFILL_TEXT)) return APPLY_MODE_LABELS[APPLY_WITH_AUTOFILL_TEXT];
+  return '';
 }
 
 function applyModeFromActions(actions) {
+  let fallbackApplyMode = '';
   for (const text of actions) {
     const applyMode = applyModeFromText(text);
-    if (applyMode) return applyMode;
+    if (applyMode === APPLY_MODE_LABELS[APPLY_NOW_TEXT]) return applyMode;
+    if (applyMode) fallbackApplyMode = applyMode;
   }
-  return '';
+  return fallbackApplyMode;
 }
 
 function parseCardText(text) {
@@ -605,7 +611,7 @@ async function inspectJobDetail(context, job, options) {
       return null;
     }
 
-    job.applyMode = job.applyMode || detailApplyMode;
+    job.applyMode = detailApplyMode || job.applyMode;
     if (!job.applyMode) {
       if (debug) console.log(`Skipping Jobright job without Apply Now or Apply with Autofill: ${job.url}`);
       return null;
