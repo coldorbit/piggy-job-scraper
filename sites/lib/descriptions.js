@@ -45,6 +45,9 @@ export function extractDescriptionFromHtml(html) {
   const jsonDescription = extractDescriptionFromJsonScripts(html);
   if (jsonDescription) return jsonDescription;
 
+  const escapedHtmlDescription = extractDescriptionFromEscapedHtml(html);
+  if (escapedHtmlDescription) return escapedHtmlDescription;
+
   const selectors = [
     /<section[^>]*(?:description|job-description|jobDescription|posting|details)[^>]*>([\s\S]*?)<\/section>/i,
     /<div[^>]*(?:description|job-description|jobDescription|posting|details)[^>]*>([\s\S]*?)<\/div>/i,
@@ -74,6 +77,7 @@ export async function scrapeJobDescription(job, options = {}) {
     const html = await fetchHtml(url, timeoutMs, sourceName);
     const description = cleanWhitespace(extractDescriptionFromHtml(html)).slice(0, 20000);
     if (!description) return job;
+    if (job.description && options.overwriteDescription && description.length <= job.description.length) return job;
     return {
       ...job,
       description,
@@ -130,6 +134,58 @@ function firstDescriptionFromJson(value) {
   }
 
   return '';
+}
+
+function extractDescriptionFromEscapedHtml(html) {
+  const decoded = decodeJavascriptEscapedHtml(html);
+  if (decoded === html) return '';
+
+  const startPatterns = [
+    /<span\s+id=["']spandesc["'][^>]*>/i,
+    /<div[^>]*(?:description|job-description|jobDescription|posting|details)[^>]*>/i,
+    /<section[^>]*(?:description|job-description|jobDescription|posting|details)[^>]*>/i,
+  ];
+
+  for (const pattern of startPatterns) {
+    const match = pattern.exec(decoded);
+    if (!match) continue;
+
+    const start = match.index;
+    const end = firstPositiveIndex(
+      [
+        decoded.indexOf('<form', start),
+        decoded.indexOf('id="application', start),
+        decoded.indexOf("id='application", start),
+        decoded.indexOf('<footer', start),
+      ],
+      decoded.length,
+    );
+    const text = cleanWhitespace(
+      cleanHtmlText(decoded.slice(start, Math.min(end, start + 40000)))
+        .replace(/\\+([’'"`.,;:!?()[\]{}])/g, '$1')
+        .replace(/\\+/g, ' '),
+    );
+    if (text.length > 300) return text;
+  }
+
+  return '';
+}
+
+function decodeJavascriptEscapedHtml(value) {
+  let decoded = String(value || '')
+    .replace(/\\u([0-9a-f]{4})/gi, (_match, code) => String.fromCodePoint(Number.parseInt(code, 16)))
+    .replace(/\\x([0-9a-f]{2})/gi, (_match, code) => String.fromCodePoint(Number.parseInt(code, 16)))
+    .replace(/\\n|\\r|\\t/g, ' ')
+    .replace(/\\-/g, '-');
+  for (let index = 0; index < 3; index += 1) {
+    decoded = decoded.replace(/\\"/g, '"').replace(/\\'/g, "'").replace(/\\\//g, '/');
+  }
+  return decoded;
+}
+
+function firstPositiveIndex(indexes, fallback) {
+  const positives = indexes.filter((index) => index > 0);
+  return positives.length ? Math.min(...positives) : fallback;
 }
 
 function matchMetaContent(html, name) {

@@ -1,7 +1,6 @@
 import 'dotenv/config';
 import axios from 'axios';
 import fs from 'node:fs/promises';
-import { dirname } from 'node:path';
 import { chromium } from 'playwright';
 import pg from 'pg';
 import { saveJobsToPostgres } from '../lib/postgres.js';
@@ -22,18 +21,6 @@ const DEFAULT_LINKEDIN_SEARCHES = [
 ];
 const DEFAULT_LINKEDIN_AI_SEARCH_MODEL = 'gpt-4.1-mini';
 const DEFAULT_LINKEDIN_AI_SEARCH_LIMIT = 12;
-const OUTPUT_FIELDS = [
-  'title',
-  'company',
-  'location',
-  'postedAt',
-  'description',
-  'url',
-  'source',
-  'sourceUrl',
-  'scrapedAt',
-  'listingText',
-];
 const DISALLOWED_WORKPLACE_PATTERN =
   /\b(?:hybrid|on[\s-]?site|in[\s-]?office|office[\s-]?based|work\s+from\s+(?:the\s+)?office)\b/i;
 const DISALLOWED_WORKPLACE_SQL_PATTERN =
@@ -47,8 +34,6 @@ const DEFAULT_ARGS = {
   searches: envList(process.env.LINKEDIN_SEARCHES || process.env.LINKEDIN_SEARCH),
   urls: envList(process.env.LINKEDIN_URLS),
   urlsFile: '',
-  outputJson: 'results/linkedin/jobs.json',
-  outputCsv: 'results/linkedin/jobs.csv',
   slackWebhookUrl: process.env.SLACK_WEBHOOK_URL || '',
   slackChannel: process.env.SLACK_CHANNEL || '',
   watchIntervalMinutes: 5,
@@ -83,8 +68,6 @@ function parseArgs(argv) {
   };
   const aliases = {
     '--urls-file': 'urlsFile',
-    '--output-json': 'outputJson',
-    '--output-csv': 'outputCsv',
     '--slack-webhook-url': 'slackWebhookUrl',
     '--slack-channel': 'slackChannel',
     '--watch-interval-minutes': 'watchIntervalMinutes',
@@ -222,11 +205,6 @@ function decodeHtml(value) {
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>');
-}
-
-function csvEscape(value) {
-  const text = String(value ?? '');
-  return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
 async function readUrlFile(path) {
@@ -655,25 +633,6 @@ async function mapWithConcurrency(items, concurrency, mapper) {
   return results;
 }
 
-async function ensureParentDirectory(path) {
-  const directory = dirname(path);
-  if (directory && directory !== '.') await fs.mkdir(directory, { recursive: true });
-}
-
-async function saveJson(path, jobs) {
-  await ensureParentDirectory(path);
-  await fs.writeFile(path, `${JSON.stringify(jobs, null, 2)}\n`, 'utf8');
-}
-
-async function saveCsv(path, jobs) {
-  await ensureParentDirectory(path);
-  const lines = [OUTPUT_FIELDS.join(',')];
-  for (const job of jobs) {
-    lines.push(OUTPUT_FIELDS.map((field) => csvEscape(job[field])).join(','));
-  }
-  await fs.writeFile(path, `${lines.join('\n')}\n`, 'utf8');
-}
-
 function databaseUrl() {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error('DATABASE_URL is required to store scraped jobs in PostgreSQL');
@@ -812,8 +771,6 @@ async function runScraper(args) {
   const jobs = await scrapeLinkedIn(args);
   console.log(`Found ${jobs.length} LinkedIn jobs posted within the last 24 hours.`);
 
-  await saveJson(args.outputJson, jobs);
-  await saveCsv(args.outputCsv, jobs);
   const { insertedOrUpdated, savedUrls = [] } = await saveJobsToPostgres(jobs);
   await hideExistingLinkedInDisallowedWorkplaceRows();
   console.log(`Saved ${insertedOrUpdated} LinkedIn jobs to PostgreSQL.`);

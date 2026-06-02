@@ -1,7 +1,6 @@
 import 'dotenv/config';
 import axios from 'axios';
 import fs from 'node:fs/promises';
-import { dirname } from 'node:path';
 import { chromium } from 'playwright';
 import { saveJobsToPostgres } from '../lib/postgres.js';
 import { filterJobsPostedWithinLast24Hours } from '../lib/recency.js';
@@ -19,27 +18,11 @@ const DEFAULT_REMOTEHUNTER_SEARCHES = [
   'Frontend Engineer',
   'Data Scientist',
 ];
-const OUTPUT_FIELDS = [
-  'title',
-  'company',
-  'location',
-  'postedText',
-  'salary',
-  'status',
-  'url',
-  'source',
-  'sourceUrl',
-  'scrapedAt',
-  'description',
-  'listingText',
-];
 
 const DEFAULT_ARGS = {
   searches: envList(process.env.REMOTEHUNTER_SEARCHES || process.env.REMOTEHUNTER_SEARCH),
   urls: envList(process.env.REMOTEHUNTER_URLS),
   urlsFile: '',
-  outputJson: 'results/remotehunter/jobs.json',
-  outputCsv: 'results/remotehunter/jobs.csv',
   slackWebhookUrl: process.env.SLACK_WEBHOOK_URL || '',
   slackChannel: process.env.SLACK_CHANNEL || '',
   watchIntervalMinutes: 5,
@@ -67,8 +50,6 @@ function parseArgs(argv) {
   };
   const aliases = {
     '--urls-file': 'urlsFile',
-    '--output-json': 'outputJson',
-    '--output-csv': 'outputCsv',
     '--slack-webhook-url': 'slackWebhookUrl',
     '--slack-channel': 'slackChannel',
     '--watch-interval-minutes': 'watchIntervalMinutes',
@@ -163,11 +144,6 @@ Options:
 
 function cleanWhitespace(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
-}
-
-function csvEscape(value) {
-  const text = String(value ?? '');
-  return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
 function jobUuidFromUrl(value) {
@@ -401,25 +377,6 @@ async function mapWithConcurrency(items, concurrency, mapper) {
   const workerCount = Math.min(Math.max(concurrency, 1), items.length);
   await Promise.all(Array.from({ length: workerCount }, worker));
   return results;
-}
-
-async function ensureParentDirectory(path) {
-  const directory = dirname(path);
-  if (directory && directory !== '.') await fs.mkdir(directory, { recursive: true });
-}
-
-async function saveJson(path, jobs) {
-  await ensureParentDirectory(path);
-  await fs.writeFile(path, `${JSON.stringify(jobs, null, 2)}\n`, 'utf8');
-}
-
-async function saveCsv(path, jobs) {
-  await ensureParentDirectory(path);
-  const lines = [OUTPUT_FIELDS.join(',')];
-  for (const job of jobs) {
-    lines.push(OUTPUT_FIELDS.map((field) => csvEscape(job[field])).join(','));
-  }
-  await fs.writeFile(path, `${lines.join('\n')}\n`, 'utf8');
 }
 
 function slackEscape(value) {

@@ -1,7 +1,6 @@
 ﻿import 'dotenv/config';
 import axios from 'axios';
 import fs from 'node:fs/promises';
-import { dirname } from 'node:path';
 import { chromium } from 'playwright';
 import { saveJobsToPostgres } from '../lib/postgres.js';
 import { filterExcludedEngineeringRoles, isEnglishOnlyJob } from '../lib/jobFilters.js';
@@ -25,25 +24,10 @@ const APPLY_MODE_LABELS = {
   [APPLY_NOW_TEXT]: 'Apply Now',
   [APPLY_WITH_AUTOFILL_TEXT]: 'Apply with Autofill',
 };
-const OUTPUT_FIELDS = [
-  'title',
-  'company',
-  'location',
-  'postedText',
-  'postedAt',
-  'url',
-  'source',
-  'scrapedAt',
-  'description',
-  'listingText',
-  'applyMode',
-];
 
 const DEFAULT_ARGS = {
   urls: envUrls(process.env.JOBRIGHT_URLS),
   urlsFile: '',
-  outputJson: 'results/jobright/jobs.json',
-  outputCsv: 'results/jobright/jobs.csv',
   slackWebhookUrl: process.env.SLACK_WEBHOOK_URL || '',
   slackChannel: process.env.SLACK_CHANNEL || '',
   watchIntervalMinutes: 5,
@@ -65,8 +49,6 @@ function parseArgs(argv) {
   const aliases = {
     '--start-url': 'startUrl',
     '--urls-file': 'urlsFile',
-    '--output-json': 'outputJson',
-    '--output-csv': 'outputCsv',
     '--slack-webhook-url': 'slackWebhookUrl',
     '--slack-channel': 'slackChannel',
     '--watch-interval-minutes': 'watchIntervalMinutes',
@@ -691,30 +673,6 @@ async function filterEligibleJobDetails(context, jobs, args) {
   );
 
   return inspected.filter(Boolean);
-}
-
-function csvEscape(value) {
-  const text = String(value ?? '');
-  return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
-}
-
-async function saveJson(path, jobs) {
-  await ensureParentDirectory(path);
-  await fs.writeFile(path, `${JSON.stringify(jobs, null, 2)}\n`, 'utf8');
-}
-
-async function saveCsv(path, jobs) {
-  await ensureParentDirectory(path);
-  const lines = [OUTPUT_FIELDS.join(',')];
-  for (const job of jobs) {
-    lines.push(OUTPUT_FIELDS.map((field) => csvEscape(job[field])).join(','));
-  }
-  await fs.writeFile(path, `${lines.join('\n')}\n`, 'utf8');
-}
-
-async function ensureParentDirectory(path) {
-  const directory = dirname(path);
-  if (directory && directory !== '.') await fs.mkdir(directory, { recursive: true });
 }
 
 function slackEscape(value) {

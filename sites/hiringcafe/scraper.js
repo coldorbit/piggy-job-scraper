@@ -2,7 +2,6 @@ import 'dotenv/config';
 import axios from 'axios';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
-import { dirname } from 'node:path';
 import { promisify } from 'node:util';
 import { saveJobsToPostgres } from '../lib/postgres.js';
 import { filterJobsPostedWithinLast24Hours } from '../lib/recency.js';
@@ -28,35 +27,16 @@ const DEFAULT_DEPARTMENTS = [
   'Data and Analytics',
   'Quality Assurance',
 ];
-const OUTPUT_FIELDS = [
-  'title',
-  'company',
-  'location',
-  'workplaceType',
-  'jobCategory',
-  'commitment',
-  'seniority',
-  'postedAt',
-  'salary',
-  'url',
-  'applyUrl',
-  'source',
-  'sourceUrl',
-  'scrapedAt',
-  'description',
-  'listingText',
-];
 
 const DEFAULT_ARGS = {
   searches: envList(process.env.HIRINGCAFE_SEARCHES || process.env.HIRINGCAFE_SEARCH),
   urls: envList(process.env.HIRINGCAFE_URLS),
   urlsFile: '',
-  outputJson: 'results/hiringcafe/jobs.json',
-  outputCsv: 'results/hiringcafe/jobs.csv',
   slackWebhookUrl: process.env.SLACK_WEBHOOK_URL || '',
   slackChannel: process.env.SLACK_CHANNEL || '',
   watchIntervalMinutes: 5,
   dateFetchedPastNDays: 1,
+  maxPages: 10,
   limit: 0,
   timeoutMs: 60000,
   detailConcurrency: 3,
@@ -79,17 +59,23 @@ function parseArgs(argv) {
   };
   const aliases = {
     '--urls-file': 'urlsFile',
-    '--output-json': 'outputJson',
-    '--output-csv': 'outputCsv',
     '--slack-webhook-url': 'slackWebhookUrl',
     '--slack-channel': 'slackChannel',
     '--watch-interval-minutes': 'watchIntervalMinutes',
     '--date-fetched-past-n-days': 'dateFetchedPastNDays',
+    '--max-pages': 'maxPages',
     '--limit': 'limit',
     '--timeout-ms': 'timeoutMs',
     '--detail-concurrency': 'detailConcurrency',
   };
-  const numericKeys = new Set(['watchIntervalMinutes', 'dateFetchedPastNDays', 'limit', 'timeoutMs', 'detailConcurrency']);
+  const numericKeys = new Set([
+    'watchIntervalMinutes',
+    'dateFetchedPastNDays',
+    'maxPages',
+    'limit',
+    'timeoutMs',
+    'detailConcurrency',
+  ]);
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -157,6 +143,7 @@ Options:
   --watch-interval-minutes N Minutes between watch runs, default 5
   --date-fetched-past-n-days N
                              HiringCafe recency filter, default 1
+  --max-pages N              Search result pages per URL, default 10, 0 means all
   --limit N                  Maximum jobs to save, 0 means no limit
   --timeout-ms N             Fetch timeout, default 60000
   --detail-concurrency N     Detail page concurrency, default 3
@@ -167,11 +154,6 @@ Options:
 
 function cleanWhitespace(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
-}
-
-function csvEscape(value) {
-  const text = Array.isArray(value) ? value.join(', ') : String(value ?? '');
-  return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
 async function readUrlFile(path) {
@@ -267,10 +249,45 @@ function extractNextData(html, sourceUrl) {
   return JSON.parse(match[1]);
 }
 
-function collectJobsFromHtml(html, sourceUrl, debug = false) {
+function hiringCafeDataUrl(sourceUrl, buildId, page) {
+  const inputUrl = new URL(sourceUrl);
+  const dataUrl = new URL(`/_next/data/${buildId}/index.json`, HIRINGCAFE_BASE_URL);
+  const searchState = inputUrl.searchParams.get('searchState');
+  if (searchState) dataUrl.searchParams.set('searchState', searchState);
+  if (page > 0) dataUrl.searchParams.set('page', String(page));
+  return dataUrl.toString();
+}
+
+async function fetchHiringCafePageProps(sourceUrl, args, page, buildId = '') {
+  if (page === 0) {
+    const html = await fetchHtml(sourceUrl, args.timeoutMs);
+    const data = extractNextData(html, sourceUrl);
+    return {
+      pageProps: data?.props?.pageProps || {},
+      buildId: data?.buildId || buildId,
+    };
+  }
+
+  if (!buildId) throw new Error(`Could not determine HiringCafe build ID for ${sourceUrl}`);
+  const dataUrl = hiringCafeDataUrl(sourceUrl, buildId, page);
+  const response = await axios.get(dataUrl, {
+    timeout: args.timeoutMs,
+    responseType: 'json',
+    headers: {
+      'user-agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+      accept: 'application/json',
+    },
+  });
+  return {
+    pageProps: response.data?.pageProps || {},
+    buildId,
+  };
+}
+
+function collectJobsFromPageProps(pageProps, sourceUrl, debug = false) {
   const scrapedAt = new Date().toISOString();
-  const data = extractNextData(html, sourceUrl);
-  const hits = data?.props?.pageProps?.ssrHits || [];
+  const hits = pageProps?.ssrHits || [];
   const jobs = [];
   const seenUrls = new Set();
 
@@ -283,8 +300,9 @@ function collectJobsFromHtml(html, sourceUrl, debug = false) {
   }
 
   if (debug) {
-    const total = data?.props?.pageProps?.ssrTotalCount;
-    console.log(`Detected ${jobs.length} relevant HiringCafe jobs from ${hits.length} hits on ${sourceUrl}`);
+    const total = pageProps?.ssrTotalCount;
+    const page = pageProps?.ssrPage ?? 0;
+    console.log(`Detected ${jobs.length} relevant HiringCafe jobs from ${hits.length} hits on ${sourceUrl} page ${page}`);
     if (total) console.log(`HiringCafe reported ${total} total matches for this search.`);
   }
   return jobs;
@@ -408,10 +426,31 @@ function isRelevantRemoteTechJob(job, rawJob) {
 }
 
 async function scrapeSourceUrl(sourceUrl, args) {
-  const html = await fetchHtml(sourceUrl, args.timeoutMs);
-  return filterJobsPostedWithinLast24Hours(
-    filterExcludedEngineeringRoles(collectJobsFromHtml(html, sourceUrl, args.debug)),
-  );
+  const jobs = [];
+  const seenUrls = new Set();
+  let buildId = '';
+  let page = 0;
+
+  while (args.maxPages <= 0 || page < args.maxPages) {
+    const result = await fetchHiringCafePageProps(sourceUrl, args, page, buildId);
+    buildId = result.buildId;
+    const pageProps = result.pageProps;
+    const pageJobs = filterJobsPostedWithinLast24Hours(
+      filterExcludedEngineeringRoles(collectJobsFromPageProps(pageProps, sourceUrl, args.debug)),
+    );
+
+    for (const job of pageJobs) {
+      if (seenUrls.has(job.url)) continue;
+      seenUrls.add(job.url);
+      jobs.push(job);
+      if (args.limit > 0 && jobs.length >= args.limit) return jobs;
+    }
+
+    if (pageProps?.ssrIsLastPage || !pageProps?.ssrHits?.length) break;
+    page += 1;
+  }
+
+  return jobs;
 }
 
 async function scrapeHiringCafe(args) {
@@ -440,27 +479,9 @@ async function scrapeHiringCafe(args) {
     timeoutMs: args.timeoutMs,
     concurrency: args.detailConcurrency,
     sourceName: 'HiringCafe',
+    overwriteDescription: true,
     urlForJob: (job) => job.applyUrl || job.url,
   });
-}
-
-async function ensureParentDirectory(path) {
-  const directory = dirname(path);
-  if (directory && directory !== '.') await fs.mkdir(directory, { recursive: true });
-}
-
-async function saveJson(path, jobs) {
-  await ensureParentDirectory(path);
-  await fs.writeFile(path, `${JSON.stringify(jobs, null, 2)}\n`, 'utf8');
-}
-
-async function saveCsv(path, jobs) {
-  await ensureParentDirectory(path);
-  const lines = [OUTPUT_FIELDS.join(',')];
-  for (const job of jobs) {
-    lines.push(OUTPUT_FIELDS.map((field) => csvEscape(job[field])).join(','));
-  }
-  await fs.writeFile(path, `${lines.join('\n')}\n`, 'utf8');
 }
 
 function slackEscape(value) {

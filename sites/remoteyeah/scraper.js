@@ -2,7 +2,6 @@ import 'dotenv/config';
 import axios from 'axios';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
-import { dirname } from 'node:path';
 import { promisify } from 'node:util';
 import { saveJobsToPostgres } from '../lib/postgres.js';
 import { filterJobsPostedWithinLast24Hours } from '../lib/recency.js';
@@ -13,27 +12,10 @@ const REMOTEYEAH_BASE_URL = 'https://remoteyeah.com';
 const DEFAULT_REMOTEYEAH_URLS = ['https://remoteyeah.com/rss.xml'];
 const DEFAULT_MARKDOWN_PROXY_URL = 'https://r.jina.ai/http://r.jina.ai/http://{rawUrl}';
 const execFileAsync = promisify(execFile);
-const OUTPUT_FIELDS = [
-  'title',
-  'company',
-  'location',
-  'category',
-  'tags',
-  'postedAt',
-  'image',
-  'url',
-  'source',
-  'sourceUrl',
-  'scrapedAt',
-  'description',
-  'listingText',
-];
 
 const DEFAULT_ARGS = {
   urls: envUrls(process.env.REMOTEYEAH_URLS),
   urlsFile: '',
-  outputJson: 'results/remoteyeah/jobs.json',
-  outputCsv: 'results/remoteyeah/jobs.csv',
   slackWebhookUrl: process.env.SLACK_WEBHOOK_URL || '',
   slackChannel: process.env.SLACK_CHANNEL || '',
   watchIntervalMinutes: 5,
@@ -58,8 +40,6 @@ function parseArgs(argv) {
   const args = { ...DEFAULT_ARGS, urls: [...DEFAULT_ARGS.urls] };
   const aliases = {
     '--urls-file': 'urlsFile',
-    '--output-json': 'outputJson',
-    '--output-csv': 'outputCsv',
     '--slack-webhook-url': 'slackWebhookUrl',
     '--slack-channel': 'slackChannel',
     '--watch-interval-minutes': 'watchIntervalMinutes',
@@ -160,11 +140,6 @@ function decodeHtml(value) {
 
 function cleanHtmlText(value) {
   return cleanWhitespace(decodeHtml(stripTags(value)));
-}
-
-function csvEscape(value) {
-  const text = Array.isArray(value) ? value.join(', ') : String(value ?? '');
-  return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
 async function readUrlFile(path) {
@@ -463,25 +438,6 @@ async function scrapeRemoteYeah(args) {
     sourceName: 'RemoteYeah',
     overwriteDescription: true,
   });
-}
-
-async function ensureParentDirectory(path) {
-  const directory = dirname(path);
-  if (directory && directory !== '.') await fs.mkdir(directory, { recursive: true });
-}
-
-async function saveJson(path, jobs) {
-  await ensureParentDirectory(path);
-  await fs.writeFile(path, `${JSON.stringify(jobs, null, 2)}\n`, 'utf8');
-}
-
-async function saveCsv(path, jobs) {
-  await ensureParentDirectory(path);
-  const lines = [OUTPUT_FIELDS.join(',')];
-  for (const job of jobs) {
-    lines.push(OUTPUT_FIELDS.map((field) => csvEscape(job[field])).join(','));
-  }
-  await fs.writeFile(path, `${lines.join('\n')}\n`, 'utf8');
 }
 
 function slackEscape(value) {

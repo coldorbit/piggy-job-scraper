@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import argparse
 import contextlib
-import csv
 import hashlib
 import json
 import math
@@ -30,7 +29,6 @@ DEFAULT_LINKEDIN_SEARCHES = [
 ]
 DEFAULT_LINKEDIN_AI_SEARCH_MODEL = "gpt-4.1-mini"
 DEFAULT_LINKEDIN_AI_SEARCH_LIMIT = 12
-OUTPUT_FIELDS = ["title", "company", "location", "postedAt", "description", "url", "source", "sourceUrl", "scrapedAt", "listingText"]
 EXCLUDED_ENGINEERING_ROLE_PATTERN = re.compile(
     r"\b(?:devops|platform|cloud)\s+(?:engineer|developer|architect|specialist|lead|manager|administrator|consultant)s?\b"
     r"|\b(?:engineer|developer|architect|specialist|lead|manager|administrator|consultant)s?\s+(?:devops|platform|cloud)\b",
@@ -123,8 +121,6 @@ def parse_args(argv):
     parser.add_argument("--search", action="append", dest="searches", default=[])
     parser.add_argument("--url", action="append", dest="urls", default=[])
     parser.add_argument("--urls-file", default="")
-    parser.add_argument("--output-json", default="results/linkedin/jobs.json")
-    parser.add_argument("--output-csv", default="results/linkedin/jobs.csv")
     parser.add_argument("--slack-webhook-url", default=os.environ.get("SLACK_WEBHOOK_URL", ""))
     parser.add_argument("--slack-channel", default=os.environ.get("SLACK_CHANNEL", ""))
     parser.add_argument("--watch", action="store_true")
@@ -523,24 +519,6 @@ def scrape_linkedin(args):
     return jobs
 
 
-def ensure_parent_directory(path):
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-
-
-def save_json(path, jobs):
-    ensure_parent_directory(path)
-    Path(path).write_text(json.dumps(jobs, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-
-
-def save_csv(path, jobs):
-    ensure_parent_directory(path)
-    with Path(path).open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=OUTPUT_FIELDS)
-        writer.writeheader()
-        for job in jobs:
-            writer.writerow({field: job.get(field, "") for field in OUTPUT_FIELDS})
-
-
 def database_url():
     url = os.environ.get("DATABASE_URL")
     if not url:
@@ -742,8 +720,6 @@ def post_new_jobs_to_slack(jobs, args):
 def run_scraper(args):
     jobs = scrape_linkedin(args)
     print(f"Found {len(jobs)} LinkedIn jobs posted within the last 24 hours.", flush=True)
-    save_json(args.output_json, jobs)
-    save_csv(args.output_csv, jobs)
     result = save_jobs_to_postgres(jobs)
     print(f"Saved {result.get('insertedOrUpdated', 0)} LinkedIn jobs to PostgreSQL.", flush=True)
     new_jobs = [job for job in jobs if job.get("url") in set(result.get("savedUrls") or [])]
