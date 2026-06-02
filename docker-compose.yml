@@ -14,6 +14,8 @@ services:
       - ${JOBRIGHT_MAX_SCROLLS:-30}
     env_file:
       - .env
+    volumes:
+      - ./.auth:/app/.auth:ro
     restart: unless-stopped
     init: true
 
@@ -134,6 +136,8 @@ services:
         && node sites/hiringcafe/scraper.js
     env_file:
       - .env
+    volumes:
+      - ./.auth:/app/.auth:ro
     profiles:
       - manual
     init: true
