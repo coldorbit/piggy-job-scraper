@@ -19,7 +19,12 @@ const DEFAULT_JOBRIGHT_SEARCHES = [
   'data scientist',
 ];
 const DEFAULT_JOBRIGHT_URLS = DEFAULT_JOBRIGHT_SEARCHES.map(searchToJobrightUrl);
+const APPLY_NOW_TEXT = 'apply now';
 const APPLY_WITH_AUTOFILL_TEXT = 'apply with autofill';
+const APPLY_MODE_LABELS = {
+  [APPLY_NOW_TEXT]: 'Apply Now',
+  [APPLY_WITH_AUTOFILL_TEXT]: 'Apply with Autofill',
+};
 const OUTPUT_FIELDS = [
   'title',
   'company',
@@ -243,12 +248,16 @@ function isRemoteUs(text) {
   return hasRemote && hasUs;
 }
 
-function hasApplyWithAutofill(text) {
-  return cleanWhitespace(text).toLowerCase() === APPLY_WITH_AUTOFILL_TEXT;
+function applyModeFromText(text) {
+  return APPLY_MODE_LABELS[cleanWhitespace(text).toLowerCase()] || '';
 }
 
-function hasApplyWithAutofillAction(actions) {
-  return actions.some((text) => hasApplyWithAutofill(text));
+function applyModeFromActions(actions) {
+  for (const text of actions) {
+    const applyMode = applyModeFromText(text);
+    if (applyMode) return applyMode;
+  }
+  return '';
 }
 
 function parseCardText(text) {
@@ -405,7 +414,7 @@ async function collectListingJobs(page, sourceUrl, debug = false, seenUrls = new
     if (!listingText) continue;
     if (debug && seenUrls.size <= 5) console.log(`Card ${seenUrls.size}: ${listingText.slice(0, 300)}`);
 
-    const hasListingAutofillAction = hasApplyWithAutofillAction(card.actionTexts || []);
+    const listingApplyMode = applyModeFromActions(card.actionTexts || []);
 
     const parsed = mergeNonEmpty(parseCardText(listingText), card);
     const filterText = [listingText, parsed.location, parsed.workMode].filter(Boolean).join(' ');
@@ -426,7 +435,7 @@ async function collectListingJobs(page, sourceUrl, debug = false, seenUrls = new
       scrapedAt,
       description: '',
       listingText,
-      applyMode: hasListingAutofillAction ? 'Apply with Autofill' : '',
+      applyMode: listingApplyMode,
     });
   }
 
@@ -570,9 +579,9 @@ async function visibleApplyActions(page) {
   );
 }
 
-async function hasEligibleAutofillAction(page) {
+async function eligibleApplyMode(page) {
   const actions = await visibleApplyActions(page).catch(() => []);
-  return actions.some((action) => hasApplyWithAutofill(action.text));
+  return applyModeFromActions(actions.map((action) => action.text));
 }
 
 async function inspectJobDetail(context, job, options) {
@@ -584,7 +593,7 @@ async function inspectJobDetail(context, job, options) {
     await waitForQuietPage(page, timeoutMs);
     await maybeAcceptPopups(page);
 
-    const hasAutofillAction = await hasEligibleAutofillAction(page);
+    const detailApplyMode = await eligibleApplyMode(page);
     const descriptionText = cleanWhitespace(await extractDescriptionFromPage(page).catch(() => ''));
     const languageJob = {
       ...job,
@@ -596,9 +605,9 @@ async function inspectJobDetail(context, job, options) {
       return null;
     }
 
-    job.applyMode = job.applyMode || (hasAutofillAction ? 'Apply with Autofill' : '');
+    job.applyMode = job.applyMode || detailApplyMode;
     if (!job.applyMode) {
-      if (debug) console.log(`Skipping Jobright job without Apply with Autofill: ${job.url}`);
+      if (debug) console.log(`Skipping Jobright job without Apply Now or Apply with Autofill: ${job.url}`);
       return null;
     }
 
@@ -787,7 +796,7 @@ async function runScraper(args) {
     console.log(`Found ${jobs.length} remote US tech jobs posted within the last 24 hours.`);
 
     jobs = await filterEligibleJobDetails(context, jobs, args);
-    console.log(`Kept ${jobs.length} English-only Jobright jobs with Apply with Autofill.`);
+    console.log(`Kept ${jobs.length} English-only Jobright jobs with Apply Now or Apply with Autofill.`);
   } finally {
     await context.close();
     await browser.close();
