@@ -418,10 +418,12 @@ async function collectJobCards(page, source, args) {
         };
         const hasExternalLinkIcon = (node) => {
           if (!node) return false;
-          const iconNodes = node.querySelectorAll('svg, li-icon, use, [data-test-icon], [type], [aria-label], [title]');
-          for (const iconNode of iconNodes) {
+          const iconSelector = 'svg, li-icon, icon, use, [data-test-icon], [data-svg-class-name], [type], [aria-label], [title]';
+          const externalIconPattern = /(?:external|offsite|new[-_\s]?window|open[-_\s]?in[-_\s]?new|link[-_\s]?external)/i;
+          const iconMatches = (iconNode) => {
             const iconText = [
               iconNode.getAttribute('data-test-icon'),
+              iconNode.getAttribute('data-svg-class-name'),
               iconNode.getAttribute('type'),
               iconNode.getAttribute('aria-label'),
               iconNode.getAttribute('title'),
@@ -432,9 +434,22 @@ async function collectJobCards(page, source, args) {
             ]
               .filter(Boolean)
               .join(' ');
-            if (/(?:external|new[-_\s]?window|open[-_\s]?in[-_\s]?new|link[-_\s]?external)/i.test(iconText)) return true;
-          }
-          return false;
+            return externalIconPattern.test(iconText);
+          };
+          const isNearControl = (iconNode) => {
+            if (node.contains(iconNode)) return true;
+            const nodeRect = node.getBoundingClientRect();
+            const iconRect = iconNode.getBoundingClientRect();
+            if (nodeRect.width <= 0 || nodeRect.height <= 0 || iconRect.width <= 0 || iconRect.height <= 0) return false;
+            const overlapsVertically = iconRect.bottom >= nodeRect.top - 6 && iconRect.top <= nodeRect.bottom + 6;
+            const nearRightEdge = iconRect.left >= nodeRect.left - 8 && iconRect.left <= nodeRect.right + 56;
+            return overlapsVertically && nearRightEdge;
+          };
+          const candidates = [
+            ...node.querySelectorAll(iconSelector),
+            ...(node.parentElement ? node.parentElement.querySelectorAll(iconSelector) : []),
+          ];
+          return candidates.some((iconNode) => iconMatches(iconNode) && isNearControl(iconNode));
         };
         const rows = [];
         for (const card of document.querySelectorAll('div.base-search-card, li')) {
@@ -526,10 +541,12 @@ async function enrichJobDetail(context, job, args) {
       };
       const hasExternalLinkIcon = (node) => {
         if (!node) return false;
-        const iconNodes = node.querySelectorAll('svg, li-icon, use, [data-test-icon], [type], [aria-label], [title]');
-        for (const iconNode of iconNodes) {
+        const iconSelector = 'svg, li-icon, icon, use, [data-test-icon], [data-svg-class-name], [type], [aria-label], [title]';
+        const externalIconPattern = /(?:external|offsite|new[-_\s]?window|open[-_\s]?in[-_\s]?new|link[-_\s]?external)/i;
+        const iconMatches = (iconNode) => {
           const iconText = [
             iconNode.getAttribute('data-test-icon'),
+            iconNode.getAttribute('data-svg-class-name'),
             iconNode.getAttribute('type'),
             iconNode.getAttribute('aria-label'),
             iconNode.getAttribute('title'),
@@ -540,9 +557,22 @@ async function enrichJobDetail(context, job, args) {
           ]
             .filter(Boolean)
             .join(' ');
-          if (/(?:external|new[-_\s]?window|open[-_\s]?in[-_\s]?new|link[-_\s]?external)/i.test(iconText)) return true;
-        }
-        return false;
+          return externalIconPattern.test(iconText);
+        };
+        const isNearControl = (iconNode) => {
+          if (node.contains(iconNode)) return true;
+          const nodeRect = node.getBoundingClientRect();
+          const iconRect = iconNode.getBoundingClientRect();
+          if (nodeRect.width <= 0 || nodeRect.height <= 0 || iconRect.width <= 0 || iconRect.height <= 0) return false;
+          const overlapsVertically = iconRect.bottom >= nodeRect.top - 6 && iconRect.top <= nodeRect.bottom + 6;
+          const nearRightEdge = iconRect.left >= nodeRect.left - 8 && iconRect.left <= nodeRect.right + 56;
+          return overlapsVertically && nearRightEdge;
+        };
+        const candidates = [
+          ...node.querySelectorAll(iconSelector),
+          ...(node.parentElement ? node.parentElement.querySelectorAll(iconSelector) : []),
+        ];
+        return candidates.some((iconNode) => iconMatches(iconNode) && isNearControl(iconNode));
       };
       const applyButtons = Array.from(document.querySelectorAll('a, button')).filter((node) => {
         const text = clean([node.textContent, node.getAttribute('aria-label')].filter(Boolean).join(' '));
