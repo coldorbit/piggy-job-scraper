@@ -314,8 +314,9 @@ function normalizeJob(hit, sourceUrl, scrapedAt) {
     processed.company_name || hit?.enriched_company_data?.name || hit?.job_information?.company,
   );
   const title = cleanWhitespace(hit?.job_information?.title || hit?.job_information?.job_title_raw);
-  const applyUrl = cleanWhitespace(hit?.apply_url);
-  const url = applyUrl || cleanWhitespace(hit?.objectID || hit?.id);
+  const applyUrl = cleanWhitespace(hit?.apply_url || hit?.hc_apply_url);
+  const hiringCafeUrl = hiringCafeJobUrl(hit);
+  const url = applyUrl || hiringCafeUrl || cleanWhitespace(hit?.objectID || hit?.id);
   const commitment = arrayText(processed.commitment);
   const salary = compensationText(processed);
   const description = cleanWhitespace(
@@ -356,12 +357,23 @@ function normalizeJob(hit, sourceUrl, scrapedAt) {
     salary,
     url,
     applyUrl,
+    hiringCafeUrl,
     source: 'HiringCafe',
     sourceUrl,
     scrapedAt,
     description,
     listingText,
   };
+}
+
+function hiringCafeJobUrl(hit) {
+  const pinnedSlug = cleanWhitespace(hit?.hc_pinned_slug);
+  if (pinnedSlug) return new URL(`/careers/${pinnedSlug}`, HIRINGCAFE_BASE_URL).toString();
+
+  const requisitionId = cleanWhitespace(hit?.requisition_id);
+  if (requisitionId) return new URL(`/job/${requisitionId}`, HIRINGCAFE_BASE_URL).toString();
+
+  return '';
 }
 
 function arrayText(value) {
@@ -480,7 +492,7 @@ async function scrapeHiringCafe(args) {
     concurrency: args.detailConcurrency,
     sourceName: 'HiringCafe',
     overwriteDescription: true,
-    urlForJob: (job) => job.applyUrl || job.url,
+    urlForJob: (job) => job.hiringCafeUrl || job.url,
   });
 }
 
