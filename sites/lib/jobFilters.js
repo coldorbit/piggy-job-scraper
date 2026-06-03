@@ -1,13 +1,5 @@
 const EXCLUDED_ENGINEERING_ROLE_PATTERN =
   /\b(?:devops|platform|cloud)\s+(?:engineer|developer|architect|specialist|lead|manager|administrator|consultant)s?\b|\b(?:engineer|developer|architect|specialist|lead|manager|administrator|consultant)s?\s+(?:devops|platform|cloud)\b/i;
-const NON_ENGLISH_LANGUAGES =
-  '(?:portuguese|spanish|french|german|italian|dutch|mandarin|chinese|cantonese|japanese|korean|vietnamese|russian|polish|turkish|arabic|hindi|bengali|urdu|hebrew|thai|indonesian|malay|tagalog|filipino)';
-const LANGUAGE_REQUIREMENT_WORDS =
-  '(?:bilingual|fluent|fluency|language|languages|native|proficient|proficiency|required|requirement|speak|speaking|verbal|written)';
-const NON_ENGLISH_LANGUAGE_REQUIREMENT_PATTERN = new RegExp(
-  `\\b${LANGUAGE_REQUIREMENT_WORDS}\\b.{0,60}\\b${NON_ENGLISH_LANGUAGES}\\b|\\b${NON_ENGLISH_LANGUAGES}\\b.{0,60}\\b${LANGUAGE_REQUIREMENT_WORDS}\\b`,
-  'i',
-);
 const ENGLISH_SIGNAL_WORDS = new Set([
   'a',
   'an',
@@ -45,6 +37,26 @@ const ENGLISH_SIGNAL_WORDS = new Set([
   'work',
   'you',
 ]);
+const NON_ENGLISH_SIGNAL_WORDS = new Set([
+  'con',
+  'de',
+  'del',
+  'des',
+  'di',
+  'el',
+  'en',
+  'et',
+  'la',
+  'las',
+  'le',
+  'les',
+  'los',
+  'para',
+  'por',
+  'und',
+  'une',
+  'vous',
+]);
 const SEARCH_CONTEXT_ROLE_FAMILY_PATTERNS = {
   ai_ml: [
     /\b(?:ai|artificial intelligence|machine learning|ml|deep learning|computer vision|nlp|llm|generative ai|data scien(?:ce|tist))\b/i,
@@ -76,7 +88,6 @@ export function filterExcludedEngineeringRoles(jobs) {
 export function isEnglishOnlyJob(job) {
   const text = jobTextForLanguageFilter(job);
   if (!text) return true;
-  if (NON_ENGLISH_LANGUAGE_REQUIREMENT_PATTERN.test(text)) return false;
   return looksMostlyEnglish(text);
 }
 
@@ -111,21 +122,13 @@ export function tagJobsWithRoleFamily(jobs) {
 
 function jobTextForLanguageFilter(job) {
   if (!job) return '';
-  const rawJobText = typeof job.rawJob === 'string' ? job.rawJob : JSON.stringify(job.rawJob || '');
-  return cleanWhitespace(
-    [
-      job.title,
-      job.company,
-      job.location,
-      job.category,
-      job.jobCategory,
-      job.description,
-      job.listingText,
-      rawJobText,
-    ]
-      .filter(Boolean)
-      .join(' '),
-  );
+  const description = cleanWhitespace(job.description);
+  if (description.length >= 80) return description;
+
+  const listingText = cleanWhitespace(job.listingText);
+  if (listingText.length >= 80) return listingText;
+
+  return cleanWhitespace([job.title, job.category, job.jobCategory, description, listingText].filter(Boolean).join(' '));
 }
 
 function looksMostlyEnglish(text) {
@@ -133,20 +136,24 @@ function looksMostlyEnglish(text) {
   if (!normalized) return true;
 
   const letters = normalized.match(/\p{L}/gu) || [];
-  if (letters.length >= 80) {
+  if (letters.length >= 20) {
     const latinLetters = normalized.match(/\p{Script=Latin}/gu) || [];
     if (latinLetters.length / letters.length < 0.75) return false;
   }
 
   const words = normalized.toLowerCase().match(/[a-z]+(?:'[a-z]+)?/g) || [];
-  if (words.length < 40) return true;
+  if (words.length < 12) return true;
 
   let signalCount = 0;
+  let nonEnglishSignalCount = 0;
   for (const word of words) {
     if (ENGLISH_SIGNAL_WORDS.has(word)) signalCount += 1;
+    if (NON_ENGLISH_SIGNAL_WORDS.has(word)) nonEnglishSignalCount += 1;
   }
 
-  return signalCount / words.length >= 0.08;
+  if (signalCount / words.length >= 0.08) return true;
+  if (words.length < 40 && nonEnglishSignalCount <= 1) return true;
+  return false;
 }
 
 function roleFamilyForSearchContext(text) {

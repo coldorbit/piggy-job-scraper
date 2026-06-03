@@ -239,7 +239,7 @@ function linkedinSearchCriteria() {
       'Easy Apply or LinkedIn-hosted application-only listings',
       'hybrid, onsite, in-office, or office-based roles',
       'DevOps, platform, and cloud-focused engineering roles',
-      'roles requiring non-English fluency',
+      'job descriptions written primarily in a non-English language',
       'closed listings that no longer accept applications',
     ],
   };
@@ -473,6 +473,45 @@ async function enrichJobDetail(context, job, args) {
     await page.waitForTimeout(750);
     const details = await evaluateWithRetry(page, () => {
       const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+      const isVisible = (node) => {
+        if (!node) return false;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+      };
+      const hasExternalLinkIcon = (node) => {
+        if (!node) return false;
+        const iconNodes = node.querySelectorAll('svg, li-icon, use, [data-test-icon], [type], [aria-label], [title]');
+        for (const iconNode of iconNodes) {
+          const iconText = [
+            iconNode.getAttribute('data-test-icon'),
+            iconNode.getAttribute('type'),
+            iconNode.getAttribute('aria-label'),
+            iconNode.getAttribute('title'),
+            iconNode.getAttribute('href'),
+            iconNode.getAttribute('xlink:href'),
+            iconNode.className?.baseVal || iconNode.className,
+            iconNode.outerHTML,
+          ]
+            .filter(Boolean)
+            .join(' ');
+          if (/(?:external|new[-_\s]?window|open[-_\s]?in[-_\s]?new|link[-_\s]?external)/i.test(iconText)) return true;
+        }
+        return false;
+      };
+      const applyButtons = Array.from(document.querySelectorAll('a, button')).filter((node) => {
+        const text = clean([node.textContent, node.getAttribute('aria-label')].filter(Boolean).join(' '));
+        return /\bapply\b/i.test(text) && isVisible(node);
+      });
+      const applyButton =
+        applyButtons.find((node) => hasExternalLinkIcon(node)) ||
+        applyButtons.find((node) => /\beasy\s+apply\b/i.test(clean(node.textContent || node.getAttribute('aria-label') || ''))) ||
+        applyButtons[0] ||
+        null;
+      const applyButtonText = clean(
+        [applyButton?.textContent, applyButton?.getAttribute('aria-label')].filter(Boolean).join(' '),
+      );
+      const applyButtonHasExternalIcon = hasExternalLinkIcon(applyButton);
       const descriptionNode = document.querySelector('div.show-more-less-html__markup');
       const applyUrlCode = document.querySelector('code#applyUrl');
       const applyUrlContent = applyUrlCode?.textContent || '';
@@ -480,12 +519,19 @@ async function enrichJobDetail(context, job, args) {
       return {
         description: clean(descriptionNode?.innerText || ''),
         rawApplyUrl: applyMatch ? decodeURIComponent(applyMatch[1]) : '',
+        applyButtonText,
+        applyButtonHref: applyButton?.href || applyButton?.getAttribute('href') || '',
+        applyButtonHasExternalIcon,
+        applyMode: applyButton ? (applyButtonHasExternalIcon ? 'External Apply' : 'Easy Apply') : '',
         title: clean(document.querySelector('h1')?.textContent),
         company: clean(document.querySelector('.topcard__org-name-link, .topcard__flavor')?.textContent),
         location: clean(document.querySelector('.topcard__flavor--bullet')?.textContent),
       };
     });
     const directUrl = externalDirectJobUrl(details.rawApplyUrl);
+    const applyButtonDirectUrl = externalDirectJobUrl(details.applyButtonHref);
+    const applyMode = details.applyMode || (directUrl || applyButtonDirectUrl ? 'External Apply' : 'LinkedIn Apply');
+    const applyOnExternalSite = applyMode === 'External Apply';
     const description = cleanHtmlText(details.description);
     return {
       ...job,
@@ -493,9 +539,12 @@ async function enrichJobDetail(context, job, args) {
       company: details.company || job.company,
       location: details.location || job.location,
       description,
-      url: directUrl || job.linkedinUrl,
+      url: applyOnExternalSite ? directUrl || applyButtonDirectUrl || job.linkedinUrl : job.linkedinUrl,
       source: 'LinkedIn',
-      applyMode: directUrl ? 'External Apply' : 'LinkedIn Apply',
+      applyMode,
+      applyOnExternalSite,
+      applyButtonText: details.applyButtonText,
+      applyButtonHasExternalIcon: details.applyButtonHasExternalIcon,
       listingText: cleanWhitespace([job.listingText, description].filter(Boolean).join(' ')),
     };
   } catch (error) {
@@ -506,6 +555,7 @@ async function enrichJobDetail(context, job, args) {
       url: job.linkedinUrl,
       source: 'LinkedIn',
       applyMode: 'LinkedIn Apply',
+      applyOnExternalSite: false,
     };
   } finally {
     await page.close();
