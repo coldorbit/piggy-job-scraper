@@ -6,6 +6,7 @@ import pg from 'pg';
 import { saveJobsToPostgres } from '../lib/postgres.js';
 import { isExcludedEngineeringRole, isEnglishOnlyJob } from '../lib/jobFilters.js';
 import { isWithinLast24Hours } from '../lib/recency.js';
+import { proxyRotatorFromEnv } from '../lib/playwrightProxy.js';
 
 const LINKEDIN_BASE_URL = 'https://www.linkedin.com';
 const DEFAULT_LINKEDIN_SEARCHES = [
@@ -29,6 +30,20 @@ const LINKEDIN_EXTERNAL_APPLY_BUTTON_XPATH = `${LINKEDIN_TOP_CARD_APPLY_BUTTON_X
 const LINKEDIN_APPLY_BUTTON_XPATH = `${LINKEDIN_EASY_APPLY_BUTTON_XPATH} | ${LINKEDIN_EXTERNAL_APPLY_BUTTON_XPATH}`;
 const LINKEDIN_APPLY_CLASSIFICATION_SETTLE_MS = 5000;
 const LINKEDIN_APPLY_CLASSIFICATION_TIMEOUT_MS = 20000;
+const LINKEDIN_MODAL_SELECTOR = [
+  '[role="dialog"]',
+  '.artdeco-modal',
+  '.contextual-sign-in-modal',
+  '.modal',
+].join(', ');
+const LINKEDIN_MODAL_CLOSE_SELECTOR = [
+  'button[aria-label*="Dismiss" i]',
+  'button[aria-label*="Close" i]',
+  '.artdeco-modal__dismiss',
+  '.contextual-sign-in-modal__modal-dismiss',
+  '.modal__dismiss',
+  'button[data-tracking-control-name*="dismiss" i]',
+].join(', ');
 const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 
@@ -298,7 +313,17 @@ async function collectJobCards(page, source, args) {
   return jobs;
 }
 
-async function enrichJobDetail(context, job, args) {
+async function newLinkedInContext(browser, proxyRotator) {
+  const proxy = proxyRotator.next();
+  return browser.newContext({
+    viewport: { width: 1440, height: 1200 },
+    userAgent: DEFAULT_USER_AGENT,
+    ...(proxy ? { proxy } : {}),
+  });
+}
+
+async function enrichJobDetail(browser, proxyRotator, job, args) {
+  const context = await newLinkedInContext(browser, proxyRotator);
   const page = await context.newPage();
   try {
     let details;
@@ -306,6 +331,7 @@ async function enrichJobDetail(context, job, args) {
       await page.goto(job.linkedinUrl, { waitUntil: 'commit', timeout: args.timeoutMs });
       await page.waitForLoadState('domcontentloaded', { timeout: Math.min(args.timeoutMs, 10000) }).catch(() => {});
       await page.waitForTimeout(750 * attempt);
+      await closeLinkedInModalIfOpen(page);
       await waitForApplyButton(page, args.timeoutMs);
 
       details = await waitForApplyClassification(page, args.timeoutMs);
@@ -342,12 +368,33 @@ async function enrichJobDetail(context, job, args) {
       applyOnExternalSite: false,
     };
   } finally {
-    await page.close();
+    await page.close().catch(() => {});
+    await context.close().catch(() => {});
   }
 }
 
 const TRANSIENT_EVALUATE_ERROR_PATTERN =
   /Execution context was destroyed|Cannot find context|most likely because of a navigation|Frame was detached/i;
+
+async function closeLinkedInModalIfOpen(page) {
+  const modal = page.locator(LINKEDIN_MODAL_SELECTOR).filter({ visible: true }).first();
+  if (!(await modal.count().catch(() => 0))) return false;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const closeButton = page.locator(LINKEDIN_MODAL_CLOSE_SELECTOR).filter({ visible: true }).first();
+    if (await closeButton.count().catch(() => 0)) {
+      await closeButton.click({ timeout: 2000 }).catch(() => {});
+    } else {
+      await page.keyboard.press('Escape').catch(() => {});
+    }
+
+    await page.waitForTimeout(300);
+    const stillOpen = await page.locator(LINKEDIN_MODAL_SELECTOR).filter({ visible: true }).count().catch(() => 0);
+    if (!stillOpen) return true;
+  }
+
+  return false;
+}
 
 async function evaluateWithRetry(page, pageFunction, pageArg, attempts = 5) {
   let lastError;
@@ -441,6 +488,7 @@ async function readApplyDetails(page) {
 async function waitForApplyClassification(page, timeoutMs) {
   const startedAt = Date.now();
   const timeout = Math.min(timeoutMs, LINKEDIN_APPLY_CLASSIFICATION_TIMEOUT_MS);
+  await closeLinkedInModalIfOpen(page);
   let latestDetails = await readApplyDetails(page);
   latestDetails.applyMode = classifyApplyDetails(latestDetails);
 
@@ -454,6 +502,7 @@ async function waitForApplyClassification(page, timeoutMs) {
     }
 
     await page.waitForTimeout(750);
+    await closeLinkedInModalIfOpen(page);
     latestDetails = await readApplyDetails(page);
     latestDetails.applyMode = classifyApplyDetails(latestDetails);
   }
@@ -525,30 +574,34 @@ function shouldKeepJob(job, now = new Date()) {
 
 async function scrapeLinkedIn(args) {
   const sources = await resolveSearchSources(args);
+  const proxyRotator = proxyRotatorFromEnv('LINKEDIN');
+  if (proxyRotator.count) {
+    console.log(`LinkedIn proxy rotation enabled with ${proxyRotator.count} proxy endpoint(s).`);
+  }
   const browser = await chromium.launch({
     headless: args.headless,
     args: ['--disable-blink-features=AutomationControlled'],
-  });
-  const context = await browser.newContext({
-    viewport: { width: 1440, height: 1200 },
-    userAgent: DEFAULT_USER_AGENT,
   });
 
   try {
     const allCards = [];
     for (const source of sources) {
       console.log(`Scraping LinkedIn search: ${source.search}`);
+      const context = await newLinkedInContext(browser, proxyRotator);
       const page = await context.newPage();
       try {
         const cards = await collectJobCards(page, source, args);
         allCards.push(...cards);
         console.log(`LinkedIn search returned ${allCards.length} candidate job(s) so far.`);
       } finally {
-        await page.close();
+        await page.close().catch(() => {});
+        await context.close().catch(() => {});
       }
     }
 
-    const detailedJobs = await mapWithConcurrency(allCards, args.detailConcurrency, (job) => enrichJobDetail(context, job, args));
+    const detailedJobs = await mapWithConcurrency(allCards, args.detailConcurrency, (job) =>
+      enrichJobDetail(browser, proxyRotator, job, args),
+    );
     const jobs = [];
     const seenUrls = new Set();
     const now = new Date();
@@ -565,7 +618,6 @@ async function scrapeLinkedIn(args) {
     }
     return jobs;
   } finally {
-    await context.close();
     await browser.close();
   }
 }

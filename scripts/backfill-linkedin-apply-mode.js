@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import pg from 'pg';
 import { chromium } from 'playwright';
+import { proxyRotatorFromEnv } from '../sites/lib/playwrightProxy.js';
 
 const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
@@ -11,6 +12,20 @@ const LINKEDIN_EXTERNAL_APPLY_BUTTON_XPATH = `${LINKEDIN_TOP_CARD_APPLY_BUTTON_X
 const LINKEDIN_APPLY_BUTTON_XPATH = `${LINKEDIN_EASY_APPLY_BUTTON_XPATH} | ${LINKEDIN_EXTERNAL_APPLY_BUTTON_XPATH}`;
 const LINKEDIN_APPLY_CLASSIFICATION_SETTLE_MS = 5000;
 const LINKEDIN_APPLY_CLASSIFICATION_TIMEOUT_MS = 20000;
+const LINKEDIN_MODAL_SELECTOR = [
+  '[role="dialog"]',
+  '.artdeco-modal',
+  '.contextual-sign-in-modal',
+  '.modal',
+].join(', ');
+const LINKEDIN_MODAL_CLOSE_SELECTOR = [
+  'button[aria-label*="Dismiss" i]',
+  'button[aria-label*="Close" i]',
+  '.artdeco-modal__dismiss',
+  '.contextual-sign-in-modal__modal-dismiss',
+  '.modal__dismiss',
+  'button[data-tracking-control-name*="dismiss" i]',
+].join(', ');
 
 function parseArgs(argv) {
   const args = {
@@ -79,6 +94,26 @@ function externalDirectJobUrl(value) {
 
 const TRANSIENT_EVALUATE_ERROR_PATTERN =
   /Execution context was destroyed|Cannot find context|most likely because of a navigation|Frame was detached/i;
+
+async function closeLinkedInModalIfOpen(page) {
+  const modal = page.locator(LINKEDIN_MODAL_SELECTOR).filter({ visible: true }).first();
+  if (!(await modal.count().catch(() => 0))) return false;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const closeButton = page.locator(LINKEDIN_MODAL_CLOSE_SELECTOR).filter({ visible: true }).first();
+    if (await closeButton.count().catch(() => 0)) {
+      await closeButton.click({ timeout: 2000 }).catch(() => {});
+    } else {
+      await page.keyboard.press('Escape').catch(() => {});
+    }
+
+    await page.waitForTimeout(300);
+    const stillOpen = await page.locator(LINKEDIN_MODAL_SELECTOR).filter({ visible: true }).count().catch(() => 0);
+    if (!stillOpen) return true;
+  }
+
+  return false;
+}
 
 async function evaluateWithRetry(page, pageFunction, pageArg, attempts = 5) {
   let lastError;
@@ -188,6 +223,7 @@ async function readApplyDetails(page) {
 async function waitForApplyClassification(page, timeoutMs) {
   const startedAt = Date.now();
   const timeout = Math.min(timeoutMs, LINKEDIN_APPLY_CLASSIFICATION_TIMEOUT_MS);
+  await closeLinkedInModalIfOpen(page);
   let latestDetails = await readApplyDetails(page);
   latestDetails.applyMode = classifyApplyDetails(latestDetails);
 
@@ -201,6 +237,7 @@ async function waitForApplyClassification(page, timeoutMs) {
     }
 
     await page.waitForTimeout(750);
+    await closeLinkedInModalIfOpen(page);
     latestDetails = await readApplyDetails(page);
     latestDetails.applyMode = classifyApplyDetails(latestDetails);
   }
@@ -214,6 +251,7 @@ async function classifyLinkedInJob(page, linkedinUrl, timeoutMs) {
     await page.goto(linkedinUrl, { waitUntil: 'commit', timeout: timeoutMs });
     await page.waitForLoadState('domcontentloaded', { timeout: Math.min(timeoutMs, 10000) }).catch(() => {});
     await page.waitForTimeout(750 * attempt);
+    await closeLinkedInModalIfOpen(page);
     await waitForApplyButton(page, timeoutMs);
 
     details = await waitForApplyClassification(page, timeoutMs);
@@ -230,6 +268,15 @@ async function classifyLinkedInJob(page, linkedinUrl, timeoutMs) {
     applyMode,
     applyOnExternalSite: applyMode === 'External Apply',
   };
+}
+
+async function newLinkedInContext(browser, proxyRotator) {
+  const proxy = proxyRotator.next();
+  return browser.newContext({
+    viewport: { width: 1440, height: 1200 },
+    userAgent: DEFAULT_USER_AGENT,
+    ...(proxy ? { proxy } : {}),
+  });
 }
 
 async function fetchRows(client, args) {
@@ -373,15 +420,16 @@ async function main() {
   const rows = await fetchRows(pool, args);
   console.log(`Backfilling ${rows.length} LinkedIn row(s) with concurrency ${args.concurrency}${args.dryRun ? ' (dry run)' : ''}.`);
 
+  const proxyRotator = proxyRotatorFromEnv('LINKEDIN');
+  if (proxyRotator.count) {
+    console.log(`LinkedIn proxy rotation enabled with ${proxyRotator.count} proxy endpoint(s).`);
+  }
   const browser = await chromium.launch({ headless: true, args: ['--disable-blink-features=AutomationControlled'] });
-  const context = await browser.newContext({
-    viewport: { width: 1440, height: 1200 },
-    userAgent: DEFAULT_USER_AGENT,
-  });
 
   const stats = { scanned: 0, updated: 0, external: 0, hosted: 0, unknown: 0, failed: 0 };
   try {
     await mapWithConcurrency(rows, args.concurrency, async (row, index) => {
+      const context = await newLinkedInContext(browser, proxyRotator);
       const page = await context.newPage();
       try {
         const classification = await classifyLinkedInJob(page, row.linkedin_url, args.timeoutMs);
@@ -401,10 +449,10 @@ async function main() {
         console.warn(`[${index + 1}/${rows.length}] id=${row.id} failed: ${error.message}`);
       } finally {
         await page.close().catch(() => {});
+        await context.close().catch(() => {});
       }
     });
   } finally {
-    await context.close();
     await browser.close();
     await pool.end();
   }

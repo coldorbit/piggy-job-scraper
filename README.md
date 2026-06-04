@@ -26,6 +26,14 @@ JOBRIGHT_MAX_SCROLLS=30
 REMOTEHUNTER_MAX_SCROLLS=10
 ```
 
+LinkedIn-only Playwright proxy rotation can be enabled with one proxy URL per line or a comma-separated list:
+
+```text
+LINKEDIN_PROXY_URLS=http://user:pass@proxy1.example.com:8080,http://user:pass@proxy2.example.com:8080
+```
+
+If credentials are shared across all proxy endpoints, use `LINKEDIN_PROXY_USERNAME` and `LINKEDIN_PROXY_PASSWORD` instead of embedding credentials in each URL.
+
 Existing rows are preserved by default during scraper startup. Destructive cleanup can be enabled only when you explicitly intend to prune old data:
 
 ```text
