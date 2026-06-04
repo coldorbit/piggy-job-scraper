@@ -24,6 +24,8 @@ const APPLY_MODE_LABELS = {
   [APPLY_NOW_TEXT]: 'Apply Now',
   [APPLY_WITH_AUTOFILL_TEXT]: 'Apply with Autofill',
 };
+const ORIGINAL_JOB_POST_XPATH =
+  '//*[@id="jobs-page-main-content"]/div[1]/section/div/div[2]/div[2]/div/div[2]/div[3]/a';
 
 const DEFAULT_ARGS = {
   urls: envUrls(process.env.JOBRIGHT_URLS),
@@ -151,6 +153,26 @@ function cleanLines(value) {
 
 function absoluteUrl(href) {
   return new URL(href, BASE_URL).toString();
+}
+
+function originalJobUrlFromHref(href) {
+  try {
+    const parsed = new URL(href, BASE_URL);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return '';
+
+    if (!parsed.hostname.endsWith('jobright.ai')) return parsed.toString();
+
+    for (const param of ['url', 'u', 'target', 'redirect', 'redirect_url', 'redirectUrl']) {
+      const value = parsed.searchParams.get(param);
+      if (!value) continue;
+      const originalUrl = originalJobUrlFromHref(value);
+      if (originalUrl) return originalUrl;
+    }
+  } catch {
+    // Ignore malformed links.
+  }
+
+  return '';
 }
 
 function searchToJobrightUrl(search) {
@@ -629,6 +651,62 @@ async function eligibleApplyMode(page) {
   return '';
 }
 
+async function extractOriginalJobPostUrl(page) {
+  const xpathHref = await page
+    .locator(`xpath=${ORIGINAL_JOB_POST_XPATH}`)
+    .first()
+    .getAttribute('href', { timeout: 1500 })
+    .catch(() => '');
+  const xpathUrl = originalJobUrlFromHref(xpathHref);
+  if (xpathUrl) return xpathUrl;
+
+  const links = await page
+    .locator('a[href]')
+    .evaluateAll((anchors) =>
+      anchors.map((anchor) => {
+        const rect = anchor.getBoundingClientRect();
+        const style = window.getComputedStyle(anchor);
+        const visible =
+          rect.width > 0 &&
+          rect.height > 0 &&
+          style.display !== 'none' &&
+          style.visibility !== 'hidden' &&
+          Number(style.opacity) !== 0;
+        let current = anchor;
+        const ancestorTexts = [];
+        for (let depth = 0; current && depth < 4; depth += 1) {
+          ancestorTexts.push(current.innerText || current.textContent || '');
+          current = current.parentElement;
+        }
+
+        return {
+          href: anchor.href || anchor.getAttribute('href') || '',
+          text: (anchor.innerText || anchor.textContent || anchor.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim(),
+          context: ancestorTexts.join(' ').replace(/\s+/g, ' ').trim(),
+          visible,
+        };
+      }),
+    )
+    .catch(() => []);
+
+  const candidates = links
+    .map((link) => {
+      const url = originalJobUrlFromHref(link.href);
+      if (!url) return null;
+      const text = `${link.text} ${link.context}`.toLowerCase();
+      let score = link.visible ? 10 : 0;
+      if (/original\s+job\s+post|original\s+post|view\s+original/i.test(text)) score += 100;
+      if (/apply\s+with\s+autofill/i.test(text)) score += 75;
+      if (/apply\s+now|apply\s+on|apply\s+at|external\s+apply|company\s+site/i.test(text)) score += 50;
+      if (/share|facebook|twitter|x\.com|linkedin|privacy|terms|login|sign\s+in/i.test(text)) score -= 100;
+      return { url, score };
+    })
+    .filter((candidate) => candidate && candidate.score > 0)
+    .sort((left, right) => right.score - left.score);
+
+  return candidates[0]?.url || '';
+}
+
 async function inspectJobDetail(context, job, options) {
   const page = await context.newPage();
   const { debug = false, includeDescription = false, timeoutMs } = options;
@@ -650,10 +728,23 @@ async function inspectJobDetail(context, job, options) {
       return null;
     }
 
+    const hasAutofillApplyMode =
+      job.applyMode === APPLY_MODE_LABELS[APPLY_WITH_AUTOFILL_TEXT] ||
+      detailApplyMode === APPLY_MODE_LABELS[APPLY_WITH_AUTOFILL_TEXT];
     job.applyMode = detailApplyMode || job.applyMode;
     if (!job.applyMode) {
       if (debug) console.log(`Skipping Jobright job without Apply Now or Apply with Autofill: ${job.url}`);
       return null;
+    }
+
+    if (hasAutofillApplyMode) {
+      const originalJobUrl = await extractOriginalJobPostUrl(page);
+      if (originalJobUrl) {
+        job.jobrightUrl = job.url;
+        job.url = originalJobUrl;
+      } else if (debug) {
+        console.log(`Could not find original Jobright autofill post URL: ${job.url}`);
+      }
     }
 
     if (includeDescription && descriptionText) {
