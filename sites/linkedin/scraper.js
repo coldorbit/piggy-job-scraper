@@ -6,7 +6,6 @@ import pg from 'pg';
 import { saveJobsToPostgres } from '../lib/postgres.js';
 import { isExcludedEngineeringRole, isEnglishOnlyJob } from '../lib/jobFilters.js';
 import { isWithinLast24Hours } from '../lib/recency.js';
-import { proxyRotatorFromEnv } from '../lib/playwrightProxy.js';
 
 const LINKEDIN_BASE_URL = 'https://www.linkedin.com';
 const DEFAULT_LINKEDIN_SEARCHES = [
@@ -313,17 +312,7 @@ async function collectJobCards(page, source, args) {
   return jobs;
 }
 
-async function newLinkedInContext(browser, proxyRotator) {
-  const proxy = proxyRotator.next();
-  return browser.newContext({
-    viewport: { width: 1440, height: 1200 },
-    userAgent: DEFAULT_USER_AGENT,
-    ...(proxy ? { proxy } : {}),
-  });
-}
-
-async function enrichJobDetail(browser, proxyRotator, job, args) {
-  const context = await newLinkedInContext(browser, proxyRotator);
+async function enrichJobDetail(context, job, args) {
   const page = await context.newPage();
   try {
     let details;
@@ -369,7 +358,6 @@ async function enrichJobDetail(browser, proxyRotator, job, args) {
     };
   } finally {
     await page.close().catch(() => {});
-    await context.close().catch(() => {});
   }
 }
 
@@ -574,20 +562,19 @@ function shouldKeepJob(job, now = new Date()) {
 
 async function scrapeLinkedIn(args) {
   const sources = await resolveSearchSources(args);
-  const proxyRotator = proxyRotatorFromEnv('LINKEDIN');
-  if (proxyRotator.count) {
-    console.log(`LinkedIn proxy rotation enabled with ${proxyRotator.count} proxy endpoint(s).`);
-  }
   const browser = await chromium.launch({
     headless: args.headless,
     args: ['--disable-blink-features=AutomationControlled'],
+  });
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 1200 },
+    userAgent: DEFAULT_USER_AGENT,
   });
 
   try {
     const allCards = [];
     for (const source of sources) {
       console.log(`Scraping LinkedIn search: ${source.search}`);
-      const context = await newLinkedInContext(browser, proxyRotator);
       const page = await context.newPage();
       try {
         const cards = await collectJobCards(page, source, args);
@@ -595,13 +582,10 @@ async function scrapeLinkedIn(args) {
         console.log(`LinkedIn search returned ${allCards.length} candidate job(s) so far.`);
       } finally {
         await page.close().catch(() => {});
-        await context.close().catch(() => {});
       }
     }
 
-    const detailedJobs = await mapWithConcurrency(allCards, args.detailConcurrency, (job) =>
-      enrichJobDetail(browser, proxyRotator, job, args),
-    );
+    const detailedJobs = await mapWithConcurrency(allCards, args.detailConcurrency, (job) => enrichJobDetail(context, job, args));
     const jobs = [];
     const seenUrls = new Set();
     const now = new Date();
@@ -618,6 +602,7 @@ async function scrapeLinkedIn(args) {
     }
     return jobs;
   } finally {
+    await context.close();
     await browser.close();
   }
 }

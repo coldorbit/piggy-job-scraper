@@ -1,7 +1,6 @@
 import 'dotenv/config';
 import pg from 'pg';
 import { chromium } from 'playwright';
-import { proxyRotatorFromEnv } from '../sites/lib/playwrightProxy.js';
 
 const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
@@ -270,15 +269,6 @@ async function classifyLinkedInJob(page, linkedinUrl, timeoutMs) {
   };
 }
 
-async function newLinkedInContext(browser, proxyRotator) {
-  const proxy = proxyRotator.next();
-  return browser.newContext({
-    viewport: { width: 1440, height: 1200 },
-    userAgent: DEFAULT_USER_AGENT,
-    ...(proxy ? { proxy } : {}),
-  });
-}
-
 async function fetchRows(client, args) {
   if (args.ids.length) {
     const result = await client.query(
@@ -420,16 +410,15 @@ async function main() {
   const rows = await fetchRows(pool, args);
   console.log(`Backfilling ${rows.length} LinkedIn row(s) with concurrency ${args.concurrency}${args.dryRun ? ' (dry run)' : ''}.`);
 
-  const proxyRotator = proxyRotatorFromEnv('LINKEDIN');
-  if (proxyRotator.count) {
-    console.log(`LinkedIn proxy rotation enabled with ${proxyRotator.count} proxy endpoint(s).`);
-  }
   const browser = await chromium.launch({ headless: true, args: ['--disable-blink-features=AutomationControlled'] });
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 1200 },
+    userAgent: DEFAULT_USER_AGENT,
+  });
 
   const stats = { scanned: 0, updated: 0, external: 0, hosted: 0, unknown: 0, failed: 0 };
   try {
     await mapWithConcurrency(rows, args.concurrency, async (row, index) => {
-      const context = await newLinkedInContext(browser, proxyRotator);
       const page = await context.newPage();
       try {
         const classification = await classifyLinkedInJob(page, row.linkedin_url, args.timeoutMs);
@@ -449,10 +438,10 @@ async function main() {
         console.warn(`[${index + 1}/${rows.length}] id=${row.id} failed: ${error.message}`);
       } finally {
         await page.close().catch(() => {});
-        await context.close().catch(() => {});
       }
     });
   } finally {
+    await context.close();
     await browser.close();
     await pool.end();
   }
