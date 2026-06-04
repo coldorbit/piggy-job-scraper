@@ -23,11 +23,16 @@ services:
     image: *scraper_image
     build: .
     command:
-      - node
-      - sites/linkedin/scraper.js
-      - --watch
-      - --watch-interval-minutes
-      - ${WATCH_INTERVAL_MINUTES:-5}
+      - sh
+      - -c
+      - >
+        node scripts/backfill-linkedin-apply-mode.js
+        --last-24-hours
+        --concurrency "${LINKEDIN_BACKFILL_CONCURRENCY:-6}"
+        --timeout-ms "${LINKEDIN_BACKFILL_TIMEOUT_MS:-20000}"
+        && node sites/linkedin/scraper.js
+        --watch
+        --watch-interval-minutes "${WATCH_INTERVAL_MINUTES:-5}"
     env_file:
       - .env
     restart: unless-stopped

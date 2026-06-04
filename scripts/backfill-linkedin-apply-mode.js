@@ -62,16 +62,20 @@ function externalDirectJobUrl(value) {
   }
 }
 
-async function evaluateWithRetry(page, pageFunction, attempts = 2) {
+const TRANSIENT_EVALUATE_ERROR_PATTERN =
+  /Execution context was destroyed|Cannot find context|most likely because of a navigation|Frame was detached/i;
+
+async function evaluateWithRetry(page, pageFunction, attempts = 5) {
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       return await page.evaluate(pageFunction);
     } catch (error) {
       lastError = error;
-      if (!/Execution context was destroyed|Cannot find context/.test(error.message) || attempt === attempts) break;
+      if (!TRANSIENT_EVALUATE_ERROR_PATTERN.test(error.message) || attempt === attempts) break;
       await page.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {});
-      await page.waitForTimeout(500);
+      await page.waitForLoadState('load', { timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(750 * attempt);
     }
   }
   throw lastError;
