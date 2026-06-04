@@ -531,6 +531,21 @@ async function enrichJobDetail(context, job, args) {
   try {
     await page.goto(job.linkedinUrl, { waitUntil: 'domcontentloaded', timeout: args.timeoutMs });
     await page.waitForTimeout(750);
+    await page
+      .waitForFunction(
+        () =>
+          Boolean(
+            document.evaluate(
+              '//*[@id="main-content"]/section[1]/div/section[2]/div/div[1]/div/div/button',
+              document,
+              null,
+              XPathResult.FIRST_ORDERED_NODE_TYPE,
+              null,
+            ).singleNodeValue,
+          ),
+        { timeout: Math.min(args.timeoutMs, 5000) },
+      )
+      .catch(() => {});
     const details = await evaluateWithRetry(page, () => {
       const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
       const isVisible = (node) => {
@@ -539,54 +554,18 @@ async function enrichJobDetail(context, job, args) {
         const rect = node.getBoundingClientRect();
         return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
       };
-      const hasExternalLinkIcon = (node) => {
-        if (!node) return false;
-        const iconSelector = 'svg, li-icon, icon, use, [data-test-icon], [data-svg-class-name], [type], [aria-label], [title]';
-        const externalIconPattern = /(?:external|offsite|new[-_\s]?window|open[-_\s]?in[-_\s]?new|link[-_\s]?external)/i;
-        const iconMatches = (iconNode) => {
-          const iconText = [
-            iconNode.getAttribute('data-test-icon'),
-            iconNode.getAttribute('data-svg-class-name'),
-            iconNode.getAttribute('type'),
-            iconNode.getAttribute('aria-label'),
-            iconNode.getAttribute('title'),
-            iconNode.getAttribute('href'),
-            iconNode.getAttribute('xlink:href'),
-            iconNode.className?.baseVal || iconNode.className,
-            iconNode.outerHTML,
-          ]
-            .filter(Boolean)
-            .join(' ');
-          return externalIconPattern.test(iconText);
-        };
-        const isNearControl = (iconNode) => {
-          if (node.contains(iconNode)) return true;
-          const nodeRect = node.getBoundingClientRect();
-          const iconRect = iconNode.getBoundingClientRect();
-          if (nodeRect.width <= 0 || nodeRect.height <= 0 || iconRect.width <= 0 || iconRect.height <= 0) return false;
-          const overlapsVertically = iconRect.bottom >= nodeRect.top - 6 && iconRect.top <= nodeRect.bottom + 6;
-          const nearRightEdge = iconRect.left >= nodeRect.left - 8 && iconRect.left <= nodeRect.right + 56;
-          return overlapsVertically && nearRightEdge;
-        };
-        const candidates = [
-          ...node.querySelectorAll(iconSelector),
-          ...(node.parentElement ? node.parentElement.querySelectorAll(iconSelector) : []),
-        ];
-        return candidates.some((iconNode) => iconMatches(iconNode) && isNearControl(iconNode));
-      };
-      const applyButtons = Array.from(document.querySelectorAll('a, button')).filter((node) => {
-        const text = clean([node.textContent, node.getAttribute('aria-label')].filter(Boolean).join(' '));
-        return /\bapply\b/i.test(text) && isVisible(node);
-      });
-      const applyButton =
-        applyButtons.find((node) => hasExternalLinkIcon(node)) ||
-        applyButtons.find((node) => /\beasy\s+apply\b/i.test(clean(node.textContent || node.getAttribute('aria-label') || ''))) ||
-        applyButtons[0] ||
-        null;
-      const applyButtonText = clean(
-        [applyButton?.textContent, applyButton?.getAttribute('aria-label')].filter(Boolean).join(' '),
+      const applyButton = document.evaluate(
+        '//*[@id="main-content"]/section[1]/div/section[2]/div/div[1]/div/div/button',
+        document,
+        null,
+        XPathResult.FIRST_ORDERED_NODE_TYPE,
+        null,
+      ).singleNodeValue;
+      const applyButtonText = clean([applyButton?.textContent, applyButton?.getAttribute('aria-label')].filter(Boolean).join(' '));
+      const applyButtonHasIcon = Boolean(
+        applyButton?.querySelector('svg, icon, li-icon, img, use, [class*="icon" i], [data-test-icon], [data-svg-class-name]'),
       );
-      const applyButtonHasExternalIcon = hasExternalLinkIcon(applyButton);
+      const applyButtonHasTextOnly = Boolean(applyButton && isVisible(applyButton) && applyButtonText && !applyButtonHasIcon);
       const descriptionNode = document.querySelector('div.show-more-less-html__markup');
       const applyUrlCode = document.querySelector('code#applyUrl');
       const applyUrlContent = applyUrlCode?.textContent || '';
@@ -596,8 +575,8 @@ async function enrichJobDetail(context, job, args) {
         rawApplyUrl: applyMatch ? decodeURIComponent(applyMatch[1]) : '',
         applyButtonText,
         applyButtonHref: applyButton?.href || applyButton?.getAttribute('href') || '',
-        applyButtonHasExternalIcon,
-        applyMode: applyButton ? (applyButtonHasExternalIcon ? 'External Apply' : 'Easy Apply') : '',
+        applyButtonHasExternalIcon: Boolean(applyButton && !applyButtonHasTextOnly),
+        applyMode: applyButton ? (applyButtonHasTextOnly ? 'Easy Apply' : 'External Apply') : '',
         title: clean(document.querySelector('h1')?.textContent),
         company: clean(document.querySelector('.topcard__org-name-link, .topcard__flavor')?.textContent),
         location: clean(document.querySelector('.topcard__flavor--bullet')?.textContent),
@@ -605,10 +584,7 @@ async function enrichJobDetail(context, job, args) {
     });
     const directUrl = externalDirectJobUrl(details.rawApplyUrl);
     const applyButtonDirectUrl = externalDirectJobUrl(details.applyButtonHref);
-    const applyMode =
-      directUrl || applyButtonDirectUrl || details.applyButtonHasExternalIcon
-        ? 'External Apply'
-        : details.applyMode || job.applyMode || 'LinkedIn Apply';
+    const applyMode = details.applyMode;
     const applyOnExternalSite = applyMode === 'External Apply';
     const description = cleanHtmlText(details.description);
     return {
@@ -627,16 +603,13 @@ async function enrichJobDetail(context, job, args) {
     };
   } catch (error) {
     console.warn(`LinkedIn detail scrape skipped for ${job.linkedinUrl}: ${error.message}`);
-    const applyButtonDirectUrl = externalDirectJobUrl(job.applyButtonHref);
-    const applyMode = applyButtonDirectUrl ? 'External Apply' : job.applyMode || 'LinkedIn Apply';
-    const applyOnExternalSite = applyMode === 'External Apply';
     return {
       ...job,
       description: '',
-      url: applyOnExternalSite ? applyButtonDirectUrl : job.linkedinUrl,
+      url: job.linkedinUrl,
       source: 'LinkedIn',
-      applyMode,
-      applyOnExternalSite,
+      applyMode: '',
+      applyOnExternalSite: false,
     };
   } finally {
     await page.close();
@@ -692,6 +665,7 @@ function isOnsiteOrHybridRole(job) {
 
 function shouldKeepJob(job, now = new Date()) {
   if (isClosedLinkedInListing(job)) return false;
+  if (!job.applyMode) return false;
   if (isLinkedInHostedApplication(job)) return false;
   if (isExcludedEngineeringRole(job)) return false;
   if (isOnsiteOrHybridRole(job)) return false;

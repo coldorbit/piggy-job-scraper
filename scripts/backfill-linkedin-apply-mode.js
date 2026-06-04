@@ -13,6 +13,7 @@ function parseArgs(argv) {
     onlyMissing: false,
     timeoutMs: 20000,
     dryRun: false,
+    last24Hours: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -28,6 +29,7 @@ function parseArgs(argv) {
     if (arg === '--timeout-ms') args.timeoutMs = Number(next || args.timeoutMs);
     if (arg === '--timeout-ms') index += 1;
     if (arg === '--dry-run') args.dryRun = true;
+    if (arg === '--last-24-hours') args.last24Hours = true;
   }
 
   args.concurrency = Math.max(1, args.concurrency || 1);
@@ -78,6 +80,21 @@ async function evaluateWithRetry(page, pageFunction, attempts = 2) {
 async function classifyLinkedInJob(page, linkedinUrl, timeoutMs) {
   await page.goto(linkedinUrl, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
   await page.waitForTimeout(750);
+  await page
+    .waitForFunction(
+      () =>
+        Boolean(
+          document.evaluate(
+            '//*[@id="main-content"]/section[1]/div/section[2]/div/div[1]/div/div/button',
+            document,
+            null,
+            XPathResult.FIRST_ORDERED_NODE_TYPE,
+            null,
+          ).singleNodeValue,
+        ),
+      { timeout: Math.min(timeoutMs, 5000) },
+    )
+    .catch(() => {});
 
   const details = await evaluateWithRetry(page, () => {
     const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
@@ -87,69 +104,39 @@ async function classifyLinkedInJob(page, linkedinUrl, timeoutMs) {
       const rect = node.getBoundingClientRect();
       return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
     };
-    const hasExternalLinkIcon = (node) => {
-      if (!node) return false;
-      const iconSelector = 'svg, li-icon, icon, use, [data-test-icon], [data-svg-class-name], [type], [aria-label], [title]';
-      const externalIconPattern = /(?:external|offsite|new[-_\s]?window|open[-_\s]?in[-_\s]?new|link[-_\s]?external)/i;
-      const iconMatches = (iconNode) => {
-        const iconText = [
-          iconNode.getAttribute('data-test-icon'),
-          iconNode.getAttribute('data-svg-class-name'),
-          iconNode.getAttribute('type'),
-          iconNode.getAttribute('aria-label'),
-          iconNode.getAttribute('title'),
-          iconNode.getAttribute('href'),
-          iconNode.getAttribute('xlink:href'),
-          iconNode.className?.baseVal || iconNode.className,
-          iconNode.outerHTML,
-        ]
-          .filter(Boolean)
-          .join(' ');
-        return externalIconPattern.test(iconText);
-      };
-      const isNearControl = (iconNode) => {
-        if (node.contains(iconNode)) return true;
-        const nodeRect = node.getBoundingClientRect();
-        const iconRect = iconNode.getBoundingClientRect();
-        if (nodeRect.width <= 0 || nodeRect.height <= 0 || iconRect.width <= 0 || iconRect.height <= 0) return false;
-        const overlapsVertically = iconRect.bottom >= nodeRect.top - 6 && iconRect.top <= nodeRect.bottom + 6;
-        const nearRightEdge = iconRect.left >= nodeRect.left - 8 && iconRect.left <= nodeRect.right + 56;
-        return overlapsVertically && nearRightEdge;
-      };
-      const candidates = [
-        ...node.querySelectorAll(iconSelector),
-        ...(node.parentElement ? node.parentElement.querySelectorAll(iconSelector) : []),
-      ];
-      return candidates.some((iconNode) => iconMatches(iconNode) && isNearControl(iconNode));
-    };
-    const applyButtons = Array.from(document.querySelectorAll('a, button')).filter((node) => {
-      const text = clean([node.textContent, node.getAttribute('aria-label')].filter(Boolean).join(' '));
-      return /\bapply\b/i.test(text) && isVisible(node);
-    });
-    const applyButton =
-      applyButtons.find((node) => hasExternalLinkIcon(node)) ||
-      applyButtons.find((node) => /\beasy\s+apply\b/i.test(clean(node.textContent || node.getAttribute('aria-label') || ''))) ||
-      applyButtons[0] ||
-      null;
+    const applyButton = document.evaluate(
+      '//*[@id="main-content"]/section[1]/div/section[2]/div/div[1]/div/div/button',
+      document,
+      null,
+      XPathResult.FIRST_ORDERED_NODE_TYPE,
+      null,
+    ).singleNodeValue;
+    const applyButtonText = clean([applyButton?.textContent, applyButton?.getAttribute('aria-label')].filter(Boolean).join(' '));
+    const applyButtonHasIcon = Boolean(
+      applyButton?.querySelector('svg, icon, li-icon, img, use, [class*="icon" i], [data-test-icon], [data-svg-class-name]'),
+    );
+    const applyButtonHasTextOnly = Boolean(applyButton && isVisible(applyButton) && applyButtonText && !applyButtonHasIcon);
     const applyUrlCode = document.querySelector('code#applyUrl');
     const applyUrlContent = applyUrlCode?.textContent || '';
     const applyMatch = applyUrlContent.match(/\?url=([^"]+)/);
     return {
-      applyButtonText: clean([applyButton?.textContent, applyButton?.getAttribute('aria-label')].filter(Boolean).join(' ')),
+      applyButtonText,
       applyButtonHref: applyButton?.href || applyButton?.getAttribute('href') || '',
-      applyButtonHasExternalIcon: hasExternalLinkIcon(applyButton),
-      applyButtonCount: applyButtons.length,
+      applyButtonHasExternalIcon: Boolean(applyButton && !applyButtonHasTextOnly),
+      applyButtonCount: applyButton ? 1 : 0,
+      hasApplyButton: Boolean(applyButton),
+      applyButtonHasIcon,
+      applyButtonHasTextOnly,
       rawApplyUrl: applyMatch ? decodeURIComponent(applyMatch[1]) : '',
     };
   });
 
   const directUrl = externalDirectJobUrl(details.rawApplyUrl) || externalDirectJobUrl(details.applyButtonHref);
-  const applyMode =
-    directUrl || details.applyButtonHasExternalIcon
-      ? 'External Apply'
-      : details.applyButtonCount || /\beasy\s+apply\b/i.test(details.applyButtonText)
-        ? 'Easy Apply'
-        : 'Unknown';
+  const applyMode = details.hasApplyButton
+    ? details.applyButtonHasTextOnly
+      ? 'Easy Apply'
+      : 'External Apply'
+    : 'Unknown';
 
   return {
     ...details,
@@ -165,12 +152,18 @@ async function fetchRows(client, args) {
   const missingSql = args.onlyMissing
     ? "AND COALESCE(raw_job->>'applyMode', '') IN ('', 'Unknown', 'LinkedIn Apply')"
     : '';
+  const recencySql = args.last24Hours
+    ? "AND COALESCE(posted_at, scraped_at) >= NOW() - INTERVAL '24 hours'"
+    : '';
   const result = await client.query(
     `
-      SELECT id, url, COALESCE(NULLIF(raw_job->>'linkedinUrl', ''), url) AS linkedin_url
+      SELECT id,
+             url,
+             COALESCE(NULLIF(raw_job->>'linkedinUrl', ''), url) AS linkedin_url
       FROM scraped_jobs
       WHERE lower(source) = 'linkedin'
         ${missingSql}
+        ${recencySql}
       ORDER BY id
       ${limitSql}
     `,
@@ -182,7 +175,7 @@ async function fetchRows(client, args) {
 async function updateRow(client, row, classification, dryRun) {
   if (dryRun) return { rowCount: 0 };
 
-  const directUrl = classification.directUrl || '';
+  const directUrl = classification.applyMode === 'External Apply' ? classification.directUrl || '' : '';
   return client.query(
     `
       WITH existing_url AS (
@@ -279,19 +272,21 @@ async function main() {
     userAgent: DEFAULT_USER_AGENT,
   });
 
-  const stats = { updated: 0, external: 0, hosted: 0, unknown: 0, failed: 0 };
+  const stats = { scanned: 0, updated: 0, external: 0, hosted: 0, unknown: 0, failed: 0 };
   try {
     await mapWithConcurrency(rows, args.concurrency, async (row, index) => {
       const page = await context.newPage();
       try {
         const classification = await classifyLinkedInJob(page, row.linkedin_url, args.timeoutMs);
-        await updateRow(pool, row, classification, args.dryRun);
-        stats.updated += 1;
+        const updateResult = await updateRow(pool, row, classification, args.dryRun);
+        stats.scanned += 1;
+        stats.updated += updateResult.rowCount;
         if (classification.applyMode === 'External Apply') stats.external += 1;
         else if (classification.applyMode === 'Unknown') stats.unknown += 1;
         else stats.hosted += 1;
         console.log(
           `[${index + 1}/${rows.length}] id=${row.id} ${classification.applyMode}` +
+            (updateResult.rowCount ? '' : ' (not written)') +
             (classification.directUrl ? ` ${classification.directUrl}` : ''),
         );
       } catch (error) {
