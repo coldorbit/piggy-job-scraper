@@ -325,6 +325,25 @@ async function waitForQuietPage(page, timeoutMs, settleMs = 2500) {
   }
 }
 
+async function maybeSelectMostRecentSort(page, args) {
+  const sorter = page
+    .locator(
+      "xpath=//*[contains(@class, 'jobs-recommend-sorter') or contains(concat(' ', normalize-space(@class), ' '), ' ant-select ')][contains(., 'Recommended') or contains(., 'Top Matched')]",
+    )
+    .first();
+
+  if (!(await sorter.count())) return;
+
+  try {
+    await sorter.click({ timeout: 5000 });
+    await page.getByText('Most Recent', { exact: true }).last().click({ timeout: 5000 });
+    await waitForQuietPage(page, args.timeoutMs, args.scrollPauseMs);
+    if (args.debug) console.log('Selected Jobright Most Recent sort.');
+  } catch (error) {
+    if (args.debug) console.warn(`Could not select Jobright Most Recent sort: ${error.message}`);
+  }
+}
+
 function mergeNonEmpty(...objects) {
   return objects.reduce((merged, object) => {
     for (const [key, value] of Object.entries(object)) {
@@ -478,6 +497,7 @@ async function scrapeJobrightJobs(args, context) {
       await page.goto(sourceUrl, { waitUntil: 'domcontentloaded', timeout: args.timeoutMs });
       await waitForQuietPage(page, args.timeoutMs);
       await maybeAcceptPopups(page);
+      await maybeSelectMostRecentSort(page, args);
       await page.waitForFunction(
         () => document.querySelectorAll("a[href*='/jobs/info/']").length > 0,
         { timeout: args.timeoutMs },
