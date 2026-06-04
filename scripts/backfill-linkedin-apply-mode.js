@@ -4,16 +4,24 @@ import { chromium } from 'playwright';
 
 const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+const LINKEDIN_TOP_CARD_APPLY_BUTTON_XPATH = '//*[@id="main-content"]/section[1]/div/section[2]/div/div[1]/div/div/button';
+const LINKEDIN_EASY_APPLY_BUTTON_XPATH =
+  `${LINKEDIN_TOP_CARD_APPLY_BUTTON_XPATH}[starts-with(@data-tracking-control-name, "public_jobs_apply-link") and contains(@data-tracking-control-name, "_onsite")]`;
+const LINKEDIN_EXTERNAL_APPLY_BUTTON_XPATH = `${LINKEDIN_TOP_CARD_APPLY_BUTTON_XPATH}[@data-modal]`;
+const LINKEDIN_APPLY_BUTTON_XPATH = `${LINKEDIN_EASY_APPLY_BUTTON_XPATH} | ${LINKEDIN_EXTERNAL_APPLY_BUTTON_XPATH}`;
 
 function parseArgs(argv) {
   const args = {
     concurrency: 6,
     limit: 0,
     offset: 0,
+    ids: [],
     onlyMissing: false,
     timeoutMs: 20000,
     dryRun: false,
     last24Hours: false,
+    latest: false,
+    latestPosted: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -25,16 +33,21 @@ function parseArgs(argv) {
     if (arg === '--limit') index += 1;
     if (arg === '--offset') args.offset = Number(next || args.offset);
     if (arg === '--offset') index += 1;
+    if (arg === '--ids') args.ids.push(...String(next || '').split(','));
+    if (arg === '--ids') index += 1;
     if (arg === '--only-missing') args.onlyMissing = true;
     if (arg === '--timeout-ms') args.timeoutMs = Number(next || args.timeoutMs);
     if (arg === '--timeout-ms') index += 1;
     if (arg === '--dry-run') args.dryRun = true;
     if (arg === '--last-24-hours') args.last24Hours = true;
+    if (arg === '--latest') args.latest = true;
+    if (arg === '--latest-posted') args.latestPosted = true;
   }
 
   args.concurrency = Math.max(1, args.concurrency || 1);
   args.limit = Math.max(0, args.limit || 0);
   args.offset = Math.max(0, args.offset || 0);
+  args.ids = args.ids.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0);
   args.timeoutMs = Math.max(5000, args.timeoutMs || 20000);
   return args;
 }
@@ -65,11 +78,11 @@ function externalDirectJobUrl(value) {
 const TRANSIENT_EVALUATE_ERROR_PATTERN =
   /Execution context was destroyed|Cannot find context|most likely because of a navigation|Frame was detached/i;
 
-async function evaluateWithRetry(page, pageFunction, attempts = 5) {
+async function evaluateWithRetry(page, pageFunction, pageArg, attempts = 5) {
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      return await page.evaluate(pageFunction);
+      return await page.evaluate(pageFunction, pageArg);
     } catch (error) {
       lastError = error;
       if (!TRANSIENT_EVALUATE_ERROR_PATTERN.test(error.message) || attempt === attempts) break;
@@ -81,66 +94,70 @@ async function evaluateWithRetry(page, pageFunction, attempts = 5) {
   throw lastError;
 }
 
-async function classifyLinkedInJob(page, linkedinUrl, timeoutMs) {
-  await page.goto(linkedinUrl, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
-  await page.waitForTimeout(750);
+async function waitForApplyButton(page, timeoutMs) {
   await page
     .waitForFunction(
-      () =>
+      (applyButtonXPath) =>
         Boolean(
           document.evaluate(
-            '//*[@id="main-content"]/section[1]/div/section[2]/div/div[1]/div/div/button',
+            applyButtonXPath,
             document,
             null,
             XPathResult.FIRST_ORDERED_NODE_TYPE,
             null,
           ).singleNodeValue,
         ),
-      { timeout: Math.min(timeoutMs, 5000) },
+      LINKEDIN_APPLY_BUTTON_XPATH,
+      { timeout: Math.min(timeoutMs, 15000) },
     )
     .catch(() => {});
+}
 
-  const details = await evaluateWithRetry(page, () => {
-    const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
-    const isVisible = (node) => {
-      if (!node) return false;
-      const style = window.getComputedStyle(node);
-      const rect = node.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
-    };
-    const applyButton = document.evaluate(
-      '//*[@id="main-content"]/section[1]/div/section[2]/div/div[1]/div/div/button',
-      document,
-      null,
-      XPathResult.FIRST_ORDERED_NODE_TYPE,
-      null,
-    ).singleNodeValue;
-    const applyButtonText = clean([applyButton?.textContent, applyButton?.getAttribute('aria-label')].filter(Boolean).join(' '));
-    const applyButtonHasIcon = Boolean(
-      applyButton?.querySelector('svg, icon, li-icon, img, use, [class*="icon" i], [data-test-icon], [data-svg-class-name]'),
+async function classifyLinkedInJob(page, linkedinUrl, timeoutMs) {
+  let details;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await page.goto(linkedinUrl, { waitUntil: 'commit', timeout: timeoutMs });
+    await page.waitForLoadState('domcontentloaded', { timeout: Math.min(timeoutMs, 10000) }).catch(() => {});
+    await page.waitForTimeout(750 * attempt);
+    await waitForApplyButton(page, timeoutMs);
+
+    details = await evaluateWithRetry(
+      page,
+      ({ applyButtonXPath, easyApplyButtonXPath, externalApplyButtonXPath }) => {
+        const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+        const xpathNode = (xpath) => {
+          return document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+        };
+        const applyButton = xpathNode(applyButtonXPath);
+        const easyApplyButton = xpathNode(easyApplyButtonXPath);
+        const externalApplyButton = xpathNode(externalApplyButtonXPath);
+        const applyButtonText = clean([applyButton?.textContent, applyButton?.getAttribute('aria-label')].filter(Boolean).join(' '));
+        const applyUrlCode = document.querySelector('code#applyUrl');
+        const applyUrlContent = applyUrlCode?.textContent || '';
+        const applyMatch = applyUrlContent.match(/\?url=([^"]+)/);
+        const applyMode = externalApplyButton ? 'External Apply' : easyApplyButton ? 'Easy Apply' : 'Unknown';
+        return {
+          applyButtonText,
+          applyButtonHref: applyButton?.href || applyButton?.getAttribute('href') || '',
+          applyButtonHasExternalIcon: applyMode === 'External Apply',
+          applyButtonCount: applyButton ? 1 : 0,
+          hasApplyButton: Boolean(applyButton),
+          applyMode,
+          rawApplyUrl: applyMatch ? decodeURIComponent(applyMatch[1]) : '',
+        };
+      },
+      {
+        applyButtonXPath: LINKEDIN_APPLY_BUTTON_XPATH,
+        easyApplyButtonXPath: LINKEDIN_EASY_APPLY_BUTTON_XPATH,
+        externalApplyButtonXPath: LINKEDIN_EXTERNAL_APPLY_BUTTON_XPATH,
+      },
     );
-    const applyButtonHasTextOnly = Boolean(applyButton && isVisible(applyButton) && applyButtonText && !applyButtonHasIcon);
-    const applyUrlCode = document.querySelector('code#applyUrl');
-    const applyUrlContent = applyUrlCode?.textContent || '';
-    const applyMatch = applyUrlContent.match(/\?url=([^"]+)/);
-    return {
-      applyButtonText,
-      applyButtonHref: applyButton?.href || applyButton?.getAttribute('href') || '',
-      applyButtonHasExternalIcon: Boolean(applyButton && !applyButtonHasTextOnly),
-      applyButtonCount: applyButton ? 1 : 0,
-      hasApplyButton: Boolean(applyButton),
-      applyButtonHasIcon,
-      applyButtonHasTextOnly,
-      rawApplyUrl: applyMatch ? decodeURIComponent(applyMatch[1]) : '',
-    };
-  });
+
+    if (details.applyMode !== 'Unknown' || attempt === 3) break;
+  }
 
   const directUrl = externalDirectJobUrl(details.rawApplyUrl) || externalDirectJobUrl(details.applyButtonHref);
-  const applyMode = details.hasApplyButton
-    ? details.applyButtonHasTextOnly
-      ? 'Easy Apply'
-      : 'External Apply'
-    : 'Unknown';
+  const applyMode = details.applyMode;
 
   return {
     ...details,
@@ -151,6 +168,22 @@ async function classifyLinkedInJob(page, linkedinUrl, timeoutMs) {
 }
 
 async function fetchRows(client, args) {
+  if (args.ids.length) {
+    const result = await client.query(
+      `
+        SELECT id,
+               url,
+               COALESCE(NULLIF(raw_job->>'linkedinUrl', ''), url) AS linkedin_url
+        FROM scraped_jobs
+        WHERE lower(source) = 'linkedin'
+          AND id = ANY($1::bigint[])
+        ORDER BY array_position($1::bigint[], id)
+      `,
+      [args.ids],
+    );
+    return result.rows;
+  }
+
   const limitSql = args.limit > 0 ? 'LIMIT $1 OFFSET $2' : 'OFFSET $1';
   const params = args.limit > 0 ? [args.limit, args.offset] : [args.offset];
   const missingSql = args.onlyMissing
@@ -159,6 +192,11 @@ async function fetchRows(client, args) {
   const recencySql = args.last24Hours
     ? "AND COALESCE(posted_at, scraped_at) >= NOW() - INTERVAL '24 hours'"
     : '';
+  const orderSql = args.latestPosted
+    ? 'COALESCE(posted_at, scraped_at) DESC, id DESC'
+    : args.latest
+      ? 'COALESCE(scraped_at, posted_at) DESC, id DESC'
+      : 'id';
   const result = await client.query(
     `
       SELECT id,
@@ -168,7 +206,7 @@ async function fetchRows(client, args) {
       WHERE lower(source) = 'linkedin'
         ${missingSql}
         ${recencySql}
-      ORDER BY id
+      ORDER BY ${orderSql}
       ${limitSql}
     `,
     params,

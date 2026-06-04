@@ -22,6 +22,11 @@ const DISALLOWED_WORKPLACE_SQL_PATTERN =
   '(hybrid|on[[:space:]-]?site|in[[:space:]-]?office|office[[:space:]-]?based|work[[:space:]]+from[[:space:]]+(the[[:space:]]+)?office)';
 const LINKEDIN_CLOSED_APPLICATION_PATTERN = /\bno\s+longer\s+accepting\s+applications\b/i;
 const LINKEDIN_HOSTED_APPLY_MODES = new Set(['LinkedIn Apply', 'Easy Apply']);
+const LINKEDIN_TOP_CARD_APPLY_BUTTON_XPATH = '//*[@id="main-content"]/section[1]/div/section[2]/div/div[1]/div/div/button';
+const LINKEDIN_EASY_APPLY_BUTTON_XPATH =
+  `${LINKEDIN_TOP_CARD_APPLY_BUTTON_XPATH}[starts-with(@data-tracking-control-name, "public_jobs_apply-link") and contains(@data-tracking-control-name, "_onsite")]`;
+const LINKEDIN_EXTERNAL_APPLY_BUTTON_XPATH = `${LINKEDIN_TOP_CARD_APPLY_BUTTON_XPATH}[@data-modal]`;
+const LINKEDIN_APPLY_BUTTON_XPATH = `${LINKEDIN_EASY_APPLY_BUTTON_XPATH} | ${LINKEDIN_EXTERNAL_APPLY_BUTTON_XPATH}`;
 const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 
@@ -235,47 +240,6 @@ async function collectJobCards(page, source, args) {
     const pageJobs = await page.evaluate(
       ({ sourceUrl, scrapedAt }) => {
         const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
-        const isVisible = (node) => {
-          if (!node) return false;
-          const style = window.getComputedStyle(node);
-          const rect = node.getBoundingClientRect();
-          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
-        };
-        const hasExternalLinkIcon = (node) => {
-          if (!node) return false;
-          const iconSelector = 'svg, li-icon, icon, use, [data-test-icon], [data-svg-class-name], [type], [aria-label], [title]';
-          const externalIconPattern = /(?:external|offsite|new[-_\s]?window|open[-_\s]?in[-_\s]?new|link[-_\s]?external)/i;
-          const iconMatches = (iconNode) => {
-            const iconText = [
-              iconNode.getAttribute('data-test-icon'),
-              iconNode.getAttribute('data-svg-class-name'),
-              iconNode.getAttribute('type'),
-              iconNode.getAttribute('aria-label'),
-              iconNode.getAttribute('title'),
-              iconNode.getAttribute('href'),
-              iconNode.getAttribute('xlink:href'),
-              iconNode.className?.baseVal || iconNode.className,
-              iconNode.outerHTML,
-            ]
-              .filter(Boolean)
-              .join(' ');
-            return externalIconPattern.test(iconText);
-          };
-          const isNearControl = (iconNode) => {
-            if (node.contains(iconNode)) return true;
-            const nodeRect = node.getBoundingClientRect();
-            const iconRect = iconNode.getBoundingClientRect();
-            if (nodeRect.width <= 0 || nodeRect.height <= 0 || iconRect.width <= 0 || iconRect.height <= 0) return false;
-            const overlapsVertically = iconRect.bottom >= nodeRect.top - 6 && iconRect.top <= nodeRect.bottom + 6;
-            const nearRightEdge = iconRect.left >= nodeRect.left - 8 && iconRect.left <= nodeRect.right + 56;
-            return overlapsVertically && nearRightEdge;
-          };
-          const candidates = [
-            ...node.querySelectorAll(iconSelector),
-            ...(node.parentElement ? node.parentElement.querySelectorAll(iconSelector) : []),
-          ];
-          return candidates.some((iconNode) => iconMatches(iconNode) && isNearControl(iconNode));
-        };
         const rows = [];
         for (const card of document.querySelectorAll('div.base-search-card, li')) {
           const link = card.querySelector('a.base-card__full-link[href], a[href*="/jobs/view/"]');
@@ -299,21 +263,6 @@ async function collectJobCards(page, source, args) {
           const time = card.querySelector('time');
           const postedAt = time?.getAttribute('datetime') || scrapedAt;
           const postedText = clean(time?.textContent);
-          const applyButtons = Array.from(card.querySelectorAll('a, button')).filter((node) => {
-            const text = clean([node.textContent, node.getAttribute('aria-label')].filter(Boolean).join(' '));
-            return /\bapply\b/i.test(text) && isVisible(node);
-          });
-          const applyButton =
-            applyButtons.find((node) => hasExternalLinkIcon(node)) ||
-            applyButtons.find((node) => /\beasy\s+apply\b/i.test(clean(node.textContent || node.getAttribute('aria-label') || ''))) ||
-            applyButtons[0] ||
-            null;
-          const applyButtonText = clean(
-            [applyButton?.textContent, applyButton?.getAttribute('aria-label')].filter(Boolean).join(' '),
-          );
-          const applyButtonHref = applyButton?.href || applyButton?.getAttribute('href') || '';
-          const applyButtonHasExternalIcon = hasExternalLinkIcon(applyButton);
-          const applyMode = applyButton ? (applyButtonHasExternalIcon ? 'External Apply' : 'Easy Apply') : '';
           const listingText = clean([title, company, location, postedText, clean(card.textContent)].join(' '));
 
           if (title) {
@@ -327,10 +276,6 @@ async function collectJobCards(page, source, args) {
               sourceUrl,
               scrapedAt,
               listingText,
-              applyMode,
-              applyButtonText,
-              applyButtonHref,
-              applyButtonHasExternalIcon,
             });
           }
         }
@@ -354,59 +299,50 @@ async function collectJobCards(page, source, args) {
 async function enrichJobDetail(context, job, args) {
   const page = await context.newPage();
   try {
-    await page.goto(job.linkedinUrl, { waitUntil: 'domcontentloaded', timeout: args.timeoutMs });
-    await page.waitForTimeout(750);
-    await page
-      .waitForFunction(
-        () =>
-          Boolean(
-            document.evaluate(
-              '//*[@id="main-content"]/section[1]/div/section[2]/div/div[1]/div/div/button',
-              document,
-              null,
-              XPathResult.FIRST_ORDERED_NODE_TYPE,
-              null,
-            ).singleNodeValue,
-          ),
-        { timeout: Math.min(args.timeoutMs, 5000) },
-      )
-      .catch(() => {});
-    const details = await evaluateWithRetry(page, () => {
-      const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
-      const isVisible = (node) => {
-        if (!node) return false;
-        const style = window.getComputedStyle(node);
-        const rect = node.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
-      };
-      const applyButton = document.evaluate(
-        '//*[@id="main-content"]/section[1]/div/section[2]/div/div[1]/div/div/button',
-        document,
-        null,
-        XPathResult.FIRST_ORDERED_NODE_TYPE,
-        null,
-      ).singleNodeValue;
-      const applyButtonText = clean([applyButton?.textContent, applyButton?.getAttribute('aria-label')].filter(Boolean).join(' '));
-      const applyButtonHasIcon = Boolean(
-        applyButton?.querySelector('svg, icon, li-icon, img, use, [class*="icon" i], [data-test-icon], [data-svg-class-name]'),
+    let details;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await page.goto(job.linkedinUrl, { waitUntil: 'commit', timeout: args.timeoutMs });
+      await page.waitForLoadState('domcontentloaded', { timeout: Math.min(args.timeoutMs, 10000) }).catch(() => {});
+      await page.waitForTimeout(750 * attempt);
+      await waitForApplyButton(page, args.timeoutMs);
+
+      details = await evaluateWithRetry(
+        page,
+        ({ applyButtonXPath, easyApplyButtonXPath, externalApplyButtonXPath }) => {
+          const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+          const xpathNode = (xpath) => {
+            return document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+          };
+          const applyButton = xpathNode(applyButtonXPath);
+          const easyApplyButton = xpathNode(easyApplyButtonXPath);
+          const externalApplyButton = xpathNode(externalApplyButtonXPath);
+          const applyButtonText = clean([applyButton?.textContent, applyButton?.getAttribute('aria-label')].filter(Boolean).join(' '));
+          const descriptionNode = document.querySelector('div.show-more-less-html__markup');
+          const applyUrlCode = document.querySelector('code#applyUrl');
+          const applyUrlContent = applyUrlCode?.textContent || '';
+          const applyMatch = applyUrlContent.match(/\?url=([^"]+)/);
+          const applyMode = externalApplyButton ? 'External Apply' : easyApplyButton ? 'Easy Apply' : '';
+          return {
+            description: clean(descriptionNode?.innerText || ''),
+            rawApplyUrl: applyMatch ? decodeURIComponent(applyMatch[1]) : '',
+            applyButtonText,
+            applyButtonHref: applyButton?.href || applyButton?.getAttribute('href') || '',
+            applyButtonHasExternalIcon: applyMode === 'External Apply',
+            applyMode,
+            title: clean(document.querySelector('h1')?.textContent),
+            company: clean(document.querySelector('.topcard__org-name-link, .topcard__flavor')?.textContent),
+            location: clean(document.querySelector('.topcard__flavor--bullet')?.textContent),
+          };
+        },
+        {
+          applyButtonXPath: LINKEDIN_APPLY_BUTTON_XPATH,
+          easyApplyButtonXPath: LINKEDIN_EASY_APPLY_BUTTON_XPATH,
+          externalApplyButtonXPath: LINKEDIN_EXTERNAL_APPLY_BUTTON_XPATH,
+        },
       );
-      const applyButtonHasTextOnly = Boolean(applyButton && isVisible(applyButton) && applyButtonText && !applyButtonHasIcon);
-      const descriptionNode = document.querySelector('div.show-more-less-html__markup');
-      const applyUrlCode = document.querySelector('code#applyUrl');
-      const applyUrlContent = applyUrlCode?.textContent || '';
-      const applyMatch = applyUrlContent.match(/\?url=([^"]+)/);
-      return {
-        description: clean(descriptionNode?.innerText || ''),
-        rawApplyUrl: applyMatch ? decodeURIComponent(applyMatch[1]) : '',
-        applyButtonText,
-        applyButtonHref: applyButton?.href || applyButton?.getAttribute('href') || '',
-        applyButtonHasExternalIcon: Boolean(applyButton && !applyButtonHasTextOnly),
-        applyMode: applyButton ? (applyButtonHasTextOnly ? 'Easy Apply' : 'External Apply') : '',
-        title: clean(document.querySelector('h1')?.textContent),
-        company: clean(document.querySelector('.topcard__org-name-link, .topcard__flavor')?.textContent),
-        location: clean(document.querySelector('.topcard__flavor--bullet')?.textContent),
-      };
-    });
+
+      if (details.applyMode || attempt === 3) break;
+    }
     const directUrl = externalDirectJobUrl(details.rawApplyUrl);
     const applyButtonDirectUrl = externalDirectJobUrl(details.applyButtonHref);
     const applyMode = details.applyMode;
@@ -444,11 +380,11 @@ async function enrichJobDetail(context, job, args) {
 const TRANSIENT_EVALUATE_ERROR_PATTERN =
   /Execution context was destroyed|Cannot find context|most likely because of a navigation|Frame was detached/i;
 
-async function evaluateWithRetry(page, pageFunction, attempts = 5) {
+async function evaluateWithRetry(page, pageFunction, pageArg, attempts = 5) {
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      return await page.evaluate(pageFunction);
+      return await page.evaluate(pageFunction, pageArg);
     } catch (error) {
       lastError = error;
       if (!TRANSIENT_EVALUATE_ERROR_PATTERN.test(error.message) || attempt === attempts) break;
@@ -458,6 +394,25 @@ async function evaluateWithRetry(page, pageFunction, attempts = 5) {
     }
   }
   throw lastError;
+}
+
+async function waitForApplyButton(page, timeoutMs) {
+  await page
+    .waitForFunction(
+      (applyButtonXPath) =>
+        Boolean(
+          document.evaluate(
+            applyButtonXPath,
+            document,
+            null,
+            XPathResult.FIRST_ORDERED_NODE_TYPE,
+            null,
+          ).singleNodeValue,
+        ),
+      LINKEDIN_APPLY_BUTTON_XPATH,
+      { timeout: Math.min(timeoutMs, 15000) },
+    )
+    .catch(() => {});
 }
 
 function externalDirectJobUrl(value) {
