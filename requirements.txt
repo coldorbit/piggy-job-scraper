@@ -1,2 +1,1 @@
-python-jobspy==1.1.82
 psycopg[binary]==3.2.9

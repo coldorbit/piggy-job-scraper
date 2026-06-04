@@ -26,17 +26,6 @@ JOBRIGHT_MAX_SCROLLS=30
 REMOTEHUNTER_MAX_SCROLLS=10
 ```
 
-LinkedIn can optionally ask OpenAI to add more search keyword phrases before scraping. The existing scraper criteria still apply after collection: remote US, last 24 hours, external apply only, no hybrid/onsite/in-office, no DevOps/platform/cloud-focused roles, English-only, and open listings.
-
-```text
-LINKEDIN_AI_ENRICH_SEARCHES=false
-LINKEDIN_AI_SEARCH_MODEL=gpt-4.1-mini
-LINKEDIN_AI_SEARCH_LIMIT=12
-OPENAI_API_KEY=
-```
-
-You can also enable it for one run with `pnpm linkedin:scrape -- --ai-enrich-searches`, or disable an env-enabled run with `--no-ai-enrich-searches`.
-
 Existing rows are preserved by default during scraper startup. Destructive cleanup can be enabled only when you explicitly intend to prune old data:
 
 ```text
@@ -52,8 +41,6 @@ pnpm install:browsers
 pnpm scrape
 pnpm watch
 ```
-
-The old Python/JobSpy LinkedIn scraper is kept as `sites/linkedin/scraper.py.backup` for manual fallback. Normal LinkedIn runs use `sites/linkedin/scraper.js`.
 
 Run one source:
 

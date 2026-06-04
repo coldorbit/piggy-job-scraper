@@ -11,16 +11,11 @@ const LINKEDIN_BASE_URL = 'https://www.linkedin.com';
 const DEFAULT_LINKEDIN_SEARCHES = [
   'software engineer',
   'data engineer',
-  'machine learning engineer',
-  'ai engineer',
-  'artificial intelligence engineer',
   'full stack engineer',
   'backend engineer',
   'frontend engineer',
   'data scientist',
 ];
-const DEFAULT_LINKEDIN_AI_SEARCH_MODEL = 'gpt-4.1-mini';
-const DEFAULT_LINKEDIN_AI_SEARCH_LIMIT = 12;
 const DISALLOWED_WORKPLACE_PATTERN =
   /\b(?:hybrid|on[\s-]?site|in[\s-]?office|office[\s-]?based|work\s+from\s+(?:the\s+)?office)\b/i;
 const DISALLOWED_WORKPLACE_SQL_PATTERN =
@@ -41,9 +36,6 @@ const DEFAULT_ARGS = {
   detailConcurrency: 3,
   limit: 0,
   timeoutMs: 60000,
-  aiEnrichSearches: envBool(process.env.LINKEDIN_AI_ENRICH_SEARCHES),
-  aiSearchModel: process.env.LINKEDIN_AI_SEARCH_MODEL || DEFAULT_LINKEDIN_AI_SEARCH_MODEL,
-  aiSearchLimit: Number(process.env.LINKEDIN_AI_SEARCH_LIMIT || DEFAULT_LINKEDIN_AI_SEARCH_LIMIT),
   debug: false,
   headless: true,
   watch: false,
@@ -54,10 +46,6 @@ function envList(value) {
     .split(/\r?\n|,/)
     .map((item) => item.trim())
     .filter(Boolean);
-}
-
-function envBool(value) {
-  return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
 }
 
 function parseArgs(argv) {
@@ -75,17 +63,8 @@ function parseArgs(argv) {
     '--detail-concurrency': 'detailConcurrency',
     '--limit': 'limit',
     '--timeout-ms': 'timeoutMs',
-    '--ai-search-model': 'aiSearchModel',
-    '--ai-search-limit': 'aiSearchLimit',
   };
-  const numericKeys = new Set([
-    'watchIntervalMinutes',
-    'maxPages',
-    'detailConcurrency',
-    'limit',
-    'timeoutMs',
-    'aiSearchLimit',
-  ]);
+  const numericKeys = new Set(['watchIntervalMinutes', 'maxPages', 'detailConcurrency', 'limit', 'timeoutMs']);
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -106,14 +85,6 @@ function parseArgs(argv) {
       if (!value || value.startsWith('--')) throw new Error('Missing value for --url');
       args.urls.push(value);
       index += 1;
-      continue;
-    }
-    if (token === '--ai-enrich-searches') {
-      args.aiEnrichSearches = true;
-      continue;
-    }
-    if (token === '--no-ai-enrich-searches') {
-      args.aiEnrichSearches = false;
       continue;
     }
     if (token === '--debug') {
@@ -170,10 +141,6 @@ Options:
   --detail-concurrency N     Detail page concurrency, default 3
   --limit N                  Maximum jobs to save, 0 means no limit
   --timeout-ms N             Playwright timeout, default 60000
-  --ai-enrich-searches       Ask OpenAI to expand generated LinkedIn searches
-  --no-ai-enrich-searches    Disable env-enabled AI search enrichment
-  --ai-search-model MODEL    OpenAI model, default ${DEFAULT_LINKEDIN_AI_SEARCH_MODEL}
-  --ai-search-limit N        Maximum AI-added search terms, default ${DEFAULT_LINKEDIN_AI_SEARCH_LIMIT}
   --headless / --no-headless Browser visibility, default headless
   --no-slack                 Disable Slack posting for this run
   --debug                    Print collection diagnostics
@@ -226,151 +193,9 @@ function searchUrl(search, start = 0) {
   return url.toString();
 }
 
-function linkedinSearchCriteria() {
-  return {
-    must_match: [
-      'remote roles in the United States',
-      'software engineering, data engineering, AI/ML engineering, full-stack, backend, frontend, or data science roles',
-      'posted in the last 24 hours',
-      'external company application URL when available',
-      'English-language listing',
-    ],
-    exclude: [
-      'Easy Apply or LinkedIn-hosted application-only listings',
-      'hybrid, onsite, in-office, or office-based roles',
-      'DevOps, platform, and cloud-focused engineering roles',
-      'job descriptions written primarily in a non-English language',
-      'closed listings that no longer accept applications',
-    ],
-  };
-}
-
-async function enrichLinkedInSearchesWithAi(searches, args) {
-  const baseSearches = searches.map(cleanWhitespace).filter(Boolean);
-  if (!args.aiEnrichSearches) return baseSearches;
-
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    console.warn('LINKEDIN_AI_ENRICH_SEARCHES is enabled but OPENAI_API_KEY is not set; using configured LinkedIn searches only.');
-    return baseSearches;
-  }
-
-  try {
-    const generatedSearches = await generateLinkedInSearchesWithOpenAi(baseSearches, args, apiKey);
-    const enriched = uniqueSearches([...baseSearches, ...generatedSearches]);
-    if (args.debug) {
-      const baseKeys = new Set(baseSearches.map((search) => search.toLowerCase()));
-      const added = enriched.filter((search) => !baseKeys.has(search.toLowerCase()));
-      console.log(`LinkedIn AI search enrichment added ${added.length} search term(s): ${added.join(', ')}`);
-    }
-    return enriched;
-  } catch (error) {
-    console.warn(`LinkedIn AI search enrichment failed: ${error.message}; using configured LinkedIn searches only.`);
-    return baseSearches;
-  }
-}
-
-async function generateLinkedInSearchesWithOpenAi(searches, args, apiKey) {
-  const limit = Math.max(args.aiSearchLimit, 0);
-  if (!limit) return [];
-
-  const prompt = {
-    task: 'Generate concise LinkedIn job search keyword phrases.',
-    existing_searches: searches,
-    criteria: linkedinSearchCriteria(),
-    rules: [
-      `Return at most ${limit} new search phrases.`,
-      'Use short keyword phrases only, not full Boolean expressions.',
-      'Prefer titles and common title variants likely to find matching roles on LinkedIn.',
-      'Do not include excluded workplace modes or excluded role families.',
-      'Do not include location, remote, United States, posted-date, or apply-mode words; those are handled by scraper filters.',
-      'Avoid duplicates or near-duplicates of existing_searches.',
-    ],
-  };
-  const response = await axios.post(
-    'https://api.openai.com/v1/responses',
-    {
-      model: args.aiSearchModel,
-      input: [
-        {
-          role: 'developer',
-          content: [
-            {
-              type: 'input_text',
-              text: 'You expand job-board search keywords while preserving strict scraper criteria. Output only JSON matching the schema.',
-            },
-          ],
-        },
-        {
-          role: 'user',
-          content: [{ type: 'input_text', text: JSON.stringify(prompt) }],
-        },
-      ],
-      text: {
-        format: {
-          type: 'json_schema',
-          name: 'linkedin_search_enrichment',
-          strict: true,
-          schema: {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              searches: {
-                type: 'array',
-                items: { type: 'string' },
-              },
-            },
-            required: ['searches'],
-          },
-        },
-      },
-    },
-    {
-      timeout: 30000,
-      headers: {
-        authorization: `Bearer ${apiKey}`,
-        'content-type': 'application/json',
-      },
-    },
-  );
-  const parsed = JSON.parse(responseOutputText(response.data));
-  return uniqueSearches((parsed.searches || []).map(sanitizeGeneratedSearch));
-}
-
-function responseOutputText(payload) {
-  for (const item of payload?.output || []) {
-    if (item?.type !== 'message') continue;
-    for (const content of item.content || []) {
-      if (content?.type === 'output_text' && content.text) return content.text;
-    }
-  }
-  throw new Error('OpenAI response did not include output_text');
-}
-
-function sanitizeGeneratedSearch(value) {
-  const text = cleanWhitespace(String(value || '').toLowerCase().replace(/[^\w\s+/#.-]+/g, ' '));
-  if (!text || text.length > 80) return '';
-  if (DISALLOWED_WORKPLACE_PATTERN.test(text) || isExcludedEngineeringRole({ title: text, listingText: text })) return '';
-  return text;
-}
-
-function uniqueSearches(searches) {
-  const output = [];
-  const seen = new Set();
-  for (const search of searches) {
-    const text = cleanWhitespace(search);
-    const key = text.toLowerCase();
-    if (!text || seen.has(key)) continue;
-    seen.add(key);
-    output.push(text);
-  }
-  return output;
-}
-
 async function resolveSearchSources(args) {
   const urls = [...args.urls, ...(await readUrlFile(args.urlsFile))];
-  let searches = args.searches.length ? args.searches : DEFAULT_LINKEDIN_SEARCHES;
-  if (!urls.length) searches = await enrichLinkedInSearchesWithAi(searches, args);
+  const searches = args.searches.length ? args.searches : DEFAULT_LINKEDIN_SEARCHES;
 
   const sourceUrls = urls.length ? urls : searches.map((search) => searchUrl(search));
   const sources = [];
