@@ -38,7 +38,7 @@ const DEFAULT_ARGS = {
   slackChannel: process.env.SLACK_CHANNEL || '',
   watchIntervalMinutes: 5,
   maxPages: 2,
-  detailConcurrency: 3,
+  detailConcurrency: 1,
   limit: 0,
   timeoutMs: 60000,
   debug: false,
