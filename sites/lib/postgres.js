@@ -177,6 +177,7 @@ export async function closePostgresConnection() {
 
 function jobToRow(job) {
   const taggedJob = tagJobRoleFamily(job);
+  const isHidden = Boolean(taggedJob.isHidden);
   return {
     url: taggedJob.url,
     duplicateKey: duplicateKeyForJob(taggedJob),
@@ -190,7 +191,8 @@ function jobToRow(job) {
     scrapedAt: toDate(taggedJob.scrapedAt) || new Date(),
     listingText: taggedJob.listingText || taggedJob.description || null,
     rawJob: taggedJob,
-    isHidden: false,
+    isHidden,
+    hiddenAt: isHidden ? new Date() : null,
     updatedAt: new Date(),
   };
 }

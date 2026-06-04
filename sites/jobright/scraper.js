@@ -660,51 +660,7 @@ async function extractOriginalJobPostUrl(page) {
   const xpathUrl = originalJobUrlFromHref(xpathHref);
   if (xpathUrl) return xpathUrl;
 
-  const links = await page
-    .locator('a[href]')
-    .evaluateAll((anchors) =>
-      anchors.map((anchor) => {
-        const rect = anchor.getBoundingClientRect();
-        const style = window.getComputedStyle(anchor);
-        const visible =
-          rect.width > 0 &&
-          rect.height > 0 &&
-          style.display !== 'none' &&
-          style.visibility !== 'hidden' &&
-          Number(style.opacity) !== 0;
-        let current = anchor;
-        const ancestorTexts = [];
-        for (let depth = 0; current && depth < 4; depth += 1) {
-          ancestorTexts.push(current.innerText || current.textContent || '');
-          current = current.parentElement;
-        }
-
-        return {
-          href: anchor.href || anchor.getAttribute('href') || '',
-          text: (anchor.innerText || anchor.textContent || anchor.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim(),
-          context: ancestorTexts.join(' ').replace(/\s+/g, ' ').trim(),
-          visible,
-        };
-      }),
-    )
-    .catch(() => []);
-
-  const candidates = links
-    .map((link) => {
-      const url = originalJobUrlFromHref(link.href);
-      if (!url) return null;
-      const text = `${link.text} ${link.context}`.toLowerCase();
-      let score = link.visible ? 10 : 0;
-      if (/original\s+job\s+post|original\s+post|view\s+original/i.test(text)) score += 100;
-      if (/apply\s+with\s+autofill/i.test(text)) score += 75;
-      if (/apply\s+now|apply\s+on|apply\s+at|external\s+apply|company\s+site/i.test(text)) score += 50;
-      if (/share|facebook|twitter|x\.com|linkedin|privacy|terms|login|sign\s+in/i.test(text)) score -= 100;
-      return { url, score };
-    })
-    .filter((candidate) => candidate && candidate.score > 0)
-    .sort((left, right) => right.score - left.score);
-
-  return candidates[0]?.url || '';
+  return '';
 }
 
 async function inspectJobDetail(context, job, options) {
@@ -892,6 +848,13 @@ function sleep(ms) {
   });
 }
 
+function hideApplyNowJobsByDefault(jobs) {
+  return jobs.map((job) => ({
+    ...job,
+    isHidden: job.applyMode === APPLY_MODE_LABELS[APPLY_NOW_TEXT],
+  }));
+}
+
 async function runScraper(args) {
   const browser = await chromium.launch({
     headless: args.headless,
@@ -913,6 +876,7 @@ async function runScraper(args) {
     console.log(`Found ${jobs.length} remote US tech jobs posted within the last 24 hours.`);
 
     jobs = await filterEligibleJobDetails(context, jobs, args);
+    jobs = hideApplyNowJobsByDefault(jobs);
     console.log(`Kept ${jobs.length} English-only Jobright jobs with Apply Now or Apply with Autofill.`);
   } finally {
     await context.close();
