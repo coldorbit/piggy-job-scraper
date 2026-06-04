@@ -278,10 +278,6 @@ function isClosedLinkedInListing(job) {
   return LINKEDIN_CLOSED_APPLICATION_PATTERN.test(cleanWhitespace([job.listingText, job.description].join(' ')));
 }
 
-function isLinkedInHostedApplication(job) {
-  return LINKEDIN_HOSTED_APPLY_MODES.has(job.applyMode);
-}
-
 function isOnsiteOrHybridRole(job) {
   return DISALLOWED_WORKPLACE_PATTERN.test(cleanWhitespace([job.location, job.listingText, job.description].join(' ')));
 }
@@ -289,7 +285,6 @@ function isOnsiteOrHybridRole(job) {
 function shouldKeepJob(job, now = new Date()) {
   if (isClosedLinkedInListing(job)) return false;
   if (!job.applyMode) return false;
-  if (isLinkedInHostedApplication(job)) return false;
   if (isExcludedEngineeringRole(job)) return false;
   if (isOnsiteOrHybridRole(job)) return false;
   if (!isWithinLast24Hours(job.postedAt, now)) return false;
