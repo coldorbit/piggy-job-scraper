@@ -9,6 +9,8 @@ const LINKEDIN_EASY_APPLY_BUTTON_XPATH =
   `${LINKEDIN_TOP_CARD_APPLY_BUTTON_XPATH}[starts-with(@data-tracking-control-name, "public_jobs_apply-link") and contains(@data-tracking-control-name, "_onsite")]`;
 const LINKEDIN_EXTERNAL_APPLY_BUTTON_XPATH = `${LINKEDIN_TOP_CARD_APPLY_BUTTON_XPATH}[@data-modal]`;
 const LINKEDIN_APPLY_BUTTON_XPATH = `${LINKEDIN_EASY_APPLY_BUTTON_XPATH} | ${LINKEDIN_EXTERNAL_APPLY_BUTTON_XPATH}`;
+const LINKEDIN_APPLY_CLASSIFICATION_SETTLE_MS = 5000;
+const LINKEDIN_APPLY_CLASSIFICATION_TIMEOUT_MS = 20000;
 
 function parseArgs(argv) {
   const args = {
@@ -113,6 +115,99 @@ async function waitForApplyButton(page, timeoutMs) {
     .catch(() => {});
 }
 
+function classifyApplyDetails(details) {
+  const directUrl = externalDirectJobUrl(details.rawApplyUrl) || externalDirectJobUrl(details.applyButtonHref);
+  if (directUrl || details.externalApplyButton || details.applyButtonHasExternalIcon || details.applyButtonLooksExternal) {
+    return 'External Apply';
+  }
+  if (details.easyApplyButton || details.applyButtonLooksEasy) return 'Easy Apply';
+  return 'Unknown';
+}
+
+async function readApplyDetails(page) {
+  return evaluateWithRetry(
+    page,
+    ({ applyButtonXPath, easyApplyButtonXPath, externalApplyButtonXPath }) => {
+      const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+      const xpathNode = (xpath) => {
+        return document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+      };
+      const applyButton = xpathNode(applyButtonXPath);
+      const easyApplyButton = xpathNode(easyApplyButtonXPath);
+      const externalApplyButton = xpathNode(externalApplyButtonXPath);
+      const applyButtonText = clean([applyButton?.textContent, applyButton?.getAttribute('aria-label')].filter(Boolean).join(' '));
+      const applyButtonTracking = clean(applyButton?.getAttribute('data-tracking-control-name'));
+      const applyUrlCode = document.querySelector('code#applyUrl');
+      const applyUrlContent = applyUrlCode?.textContent || '';
+      const applyMatch = applyUrlContent.match(/\?url=([^"]+)/);
+      const iconText = clean(
+        Array.from(applyButton?.querySelectorAll('svg, use, li-icon') || [])
+          .map((node) =>
+            [
+              node.getAttribute('type'),
+              node.getAttribute('data-test-icon'),
+              node.getAttribute('aria-label'),
+              node.getAttribute('href'),
+              node.getAttribute('xlink:href'),
+              node.outerHTML,
+            ]
+              .filter(Boolean)
+              .join(' '),
+          )
+          .join(' '),
+      );
+      const buttonSignalText = clean([applyButtonText, applyButtonTracking, iconText].join(' '));
+      const applyButtonHasExternalIcon = /\b(?:external|offsite|link-out|arrow|open_in_new)\b/i.test(iconText);
+      const applyButtonLooksExternal =
+        /\b(?:external|offsite|company\s+(?:site|website)|apply\s+on|apply\s+at|opens?\s+in\s+(?:a\s+)?new)\b/i.test(buttonSignalText) ||
+        /_offsite\b/i.test(applyButtonTracking);
+      const applyButtonLooksEasy = /\beasy\s+apply\b/i.test(buttonSignalText) || /_onsite\b/i.test(applyButtonTracking);
+      const applyMode = 'Unknown';
+      return {
+        applyButtonText,
+        applyButtonHref: applyButton?.href || applyButton?.getAttribute('href') || '',
+        applyButtonHasExternalIcon,
+        applyButtonLooksExternal,
+        applyButtonLooksEasy,
+        applyButtonCount: applyButton ? 1 : 0,
+        hasApplyButton: Boolean(applyButton),
+        easyApplyButton: Boolean(easyApplyButton),
+        externalApplyButton: Boolean(externalApplyButton),
+        applyMode,
+        rawApplyUrl: applyMatch ? decodeURIComponent(applyMatch[1]) : '',
+      };
+    },
+    {
+      applyButtonXPath: LINKEDIN_APPLY_BUTTON_XPATH,
+      easyApplyButtonXPath: LINKEDIN_EASY_APPLY_BUTTON_XPATH,
+      externalApplyButtonXPath: LINKEDIN_EXTERNAL_APPLY_BUTTON_XPATH,
+    },
+  );
+}
+
+async function waitForApplyClassification(page, timeoutMs) {
+  const startedAt = Date.now();
+  const timeout = Math.min(timeoutMs, LINKEDIN_APPLY_CLASSIFICATION_TIMEOUT_MS);
+  let latestDetails = await readApplyDetails(page);
+  latestDetails.applyMode = classifyApplyDetails(latestDetails);
+
+  while (Date.now() - startedAt < timeout) {
+    if (latestDetails.applyMode === 'External Apply') return latestDetails;
+    if (
+      latestDetails.applyMode === 'Easy Apply' &&
+      Date.now() - startedAt >= LINKEDIN_APPLY_CLASSIFICATION_SETTLE_MS
+    ) {
+      return latestDetails;
+    }
+
+    await page.waitForTimeout(750);
+    latestDetails = await readApplyDetails(page);
+    latestDetails.applyMode = classifyApplyDetails(latestDetails);
+  }
+
+  return latestDetails;
+}
+
 async function classifyLinkedInJob(page, linkedinUrl, timeoutMs) {
   let details;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -121,37 +216,7 @@ async function classifyLinkedInJob(page, linkedinUrl, timeoutMs) {
     await page.waitForTimeout(750 * attempt);
     await waitForApplyButton(page, timeoutMs);
 
-    details = await evaluateWithRetry(
-      page,
-      ({ applyButtonXPath, easyApplyButtonXPath, externalApplyButtonXPath }) => {
-        const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
-        const xpathNode = (xpath) => {
-          return document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-        };
-        const applyButton = xpathNode(applyButtonXPath);
-        const easyApplyButton = xpathNode(easyApplyButtonXPath);
-        const externalApplyButton = xpathNode(externalApplyButtonXPath);
-        const applyButtonText = clean([applyButton?.textContent, applyButton?.getAttribute('aria-label')].filter(Boolean).join(' '));
-        const applyUrlCode = document.querySelector('code#applyUrl');
-        const applyUrlContent = applyUrlCode?.textContent || '';
-        const applyMatch = applyUrlContent.match(/\?url=([^"]+)/);
-        const applyMode = externalApplyButton ? 'External Apply' : easyApplyButton ? 'Easy Apply' : 'Unknown';
-        return {
-          applyButtonText,
-          applyButtonHref: applyButton?.href || applyButton?.getAttribute('href') || '',
-          applyButtonHasExternalIcon: applyMode === 'External Apply',
-          applyButtonCount: applyButton ? 1 : 0,
-          hasApplyButton: Boolean(applyButton),
-          applyMode,
-          rawApplyUrl: applyMatch ? decodeURIComponent(applyMatch[1]) : '',
-        };
-      },
-      {
-        applyButtonXPath: LINKEDIN_APPLY_BUTTON_XPATH,
-        easyApplyButtonXPath: LINKEDIN_EASY_APPLY_BUTTON_XPATH,
-        externalApplyButtonXPath: LINKEDIN_EXTERNAL_APPLY_BUTTON_XPATH,
-      },
-    );
+    details = await waitForApplyClassification(page, timeoutMs);
 
     if (details.applyMode !== 'Unknown' || attempt === 3) break;
   }
