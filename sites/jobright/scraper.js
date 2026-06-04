@@ -155,7 +155,7 @@ function absoluteUrl(href) {
 
 function searchToJobrightUrl(search) {
   const slug = cleanWhitespace(search).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  return `${BASE_URL}/jobs/${slug}-jobs-in-remote%2C-united-states`;
+  return `${BASE_URL}/jobs/${slug}-jobs-in-remote-united-states`;
 }
 
 async function readUrlFile(path) {
@@ -405,7 +405,10 @@ async function collectListingJobs(page, sourceUrl, debug = false, seenUrls = new
     if (!href) continue;
 
     const url = absoluteUrl(href);
-    if (seenUrls.has(url)) continue;
+    if (seenUrls.has(url)) {
+      console.log(`Jobright already seen listing URL during source scan: ${url}`);
+      continue;
+    }
     seenUrls.add(url);
 
     const listingText = cleanWhitespace(card.text);
@@ -469,7 +472,9 @@ async function scrapeJobrightJobs(args, context) {
   const page = await context.newPage();
 
   try {
-    for (const sourceUrl of sourceUrls) {
+    for (let sourceIndex = 0; sourceIndex < sourceUrls.length; sourceIndex += 1) {
+      const sourceUrl = sourceUrls[sourceIndex];
+      console.log(`Jobright source ${sourceIndex + 1}/${sourceUrls.length}: ${sourceUrl}`);
       await page.goto(sourceUrl, { waitUntil: 'domcontentloaded', timeout: args.timeoutMs });
       await waitForQuietPage(page, args.timeoutMs);
       await maybeAcceptPopups(page);
@@ -484,9 +489,13 @@ async function scrapeJobrightJobs(args, context) {
         args.scrollPauseMs,
         args.debug,
       );
+      console.log(`Jobright source ${sourceIndex + 1}/${sourceUrls.length} collected ${sourceJobs.length} candidate job(s).`);
 
       for (const job of filterExcludedEngineeringRoles(sourceJobs)) {
-        if (seenUrls.has(job.url)) continue;
+        if (seenUrls.has(job.url)) {
+          console.log(`Jobright already seen job URL across sources: ${job.url}`);
+          continue;
+        }
         seenUrls.add(job.url);
         allJobs.push(job);
         if (args.limit > 0 && allJobs.length >= args.limit) return allJobs;
