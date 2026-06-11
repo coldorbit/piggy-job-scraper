@@ -96,6 +96,11 @@ export function filterEnglishOnlyJobs(jobs) {
 }
 
 export function roleFamilyForJob(job) {
+  if (String(job?.source || '').toLowerCase() === 'jobright') {
+    const titleRoleFamily = roleFamilyForTitle(job?.title);
+    if (titleRoleFamily) return titleRoleFamily;
+  }
+
   return roleFamilyForSearchContext(
     [
       searchTextFromSourceUrl(job?.sourceUrl),
@@ -162,6 +167,28 @@ function roleFamilyForSearchContext(text) {
     if (SEARCH_CONTEXT_ROLE_FAMILY_PATTERNS[family].some((pattern) => pattern.test(normalized))) return family;
   }
   return 'software';
+}
+
+function roleFamilyForTitle(title) {
+  const normalized = cleanWhitespace(title);
+  if (!normalized) return '';
+
+  const titleRoleFamilyPatterns = {
+    ai_ml: [
+      /\b(?:ai|artificial intelligence|machine learning|ml|deep learning|computer vision|nlp|llm|generative ai|prompt engineer|data scien(?:ce|tist)|applied scientist|research scientist)\b/i,
+    ],
+    data: [
+      /\b(?:data engineer|data engineering|analytics engineer|data analyst|business intelligence|bi engineer|etl|elt|data warehouse|data pipeline|database engineer|database administrator|dba)\b/i,
+    ],
+    software: [
+      /\b(?:software engineer|software developer|full[ -]?stack|backend|back[ -]?end|frontend|front[ -]?end|web developer|application developer|mobile developer|ios developer|android developer|qa engineer|quality assurance|test engineer|sdet|engineer|developer)\b/i,
+    ],
+  };
+
+  for (const family of ['ai_ml', 'data', 'software']) {
+    if (titleRoleFamilyPatterns[family].some((pattern) => pattern.test(normalized))) return family;
+  }
+  return '';
 }
 
 function searchTextFromSourceUrl(value) {
