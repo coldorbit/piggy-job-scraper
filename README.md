@@ -46,7 +46,7 @@ Run one source:
 
 ```bash
 pnpm jobright:scrape -- --max-scrolls 30
-pnpm linkedin:watch -- --watch-interval-minutes 10
+pnpm builtin:watch -- --watch-interval-minutes 10
 ```
 
 ## Docker
@@ -66,7 +66,7 @@ docker compose run --rm scrape
 Start all watcher containers:
 
 ```bash
-docker compose up -d jobright-watch linkedin-watch builtin-watch simplify-watch diversityjobs-watch remoteyeah-watch remotehunter-watch hiringcafe-watch
+docker compose up -d jobright-watch builtin-watch simplify-watch diversityjobs-watch remoteyeah-watch remotehunter-watch hiringcafe-watch
 ```
 
 View logs:
@@ -103,7 +103,7 @@ Edit `.env`, then run:
 
 ```bash
 docker compose build
-docker compose up -d jobright-watch linkedin-watch builtin-watch simplify-watch diversityjobs-watch remoteyeah-watch remotehunter-watch hiringcafe-watch
+docker compose up -d jobright-watch builtin-watch simplify-watch diversityjobs-watch remoteyeah-watch remotehunter-watch hiringcafe-watch
 ```
 
 ## GitHub Actions Deployment

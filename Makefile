@@ -7,7 +7,7 @@ REMOTEHUNTER_MAX_SCROLLS ?= 10
 help:
 	@printf '%s\n' \
 		'Targets:' \
-		'  make install-python   Install Python deps for the backup LinkedIn scraper' \
+		'  make install-python   Install Python deps for legacy helper scripts' \
 		'  make watch            Watch all sources in parallel' \
 		'  make scrape           Scrape all sources once' \
 		'  make docker-build     Build the Docker image' \
@@ -21,13 +21,13 @@ install-browsers:
 install-python:
 	python3 -m pip install -r requirements.txt
 
-scrape: scrape-jobright scrape-linkedin scrape-builtin scrape-simplify scrape-diversityjobs scrape-remoteyeah scrape-remotehunter scrape-hiringcafe
+scrape: scrape-jobright scrape-builtin scrape-simplify scrape-diversityjobs scrape-remoteyeah scrape-remotehunter scrape-hiringcafe
 
 scrape-jobright:
 	pnpm jobright:scrape -- --max-scrolls $(JOBRIGHT_MAX_SCROLLS)
 
 scrape-linkedin:
-	pnpm linkedin:scrape
+	@printf '%s\n' 'LinkedIn scraper disabled; skipping.'
 
 scrape-builtin:
 	pnpm builtin:scrape
@@ -48,13 +48,13 @@ scrape-hiringcafe:
 	pnpm hiringcafe:scrape
 
 watch:
-	$(MAKE) -j8 watch-jobright watch-linkedin watch-builtin watch-simplify watch-diversityjobs watch-remoteyeah watch-remotehunter watch-hiringcafe
+	$(MAKE) -j7 watch-jobright watch-builtin watch-simplify watch-diversityjobs watch-remoteyeah watch-remotehunter watch-hiringcafe
 
 watch-jobright:
 	node sites/jobright/scraper.js --watch --watch-interval-minutes $(WATCH_INTERVAL_MINUTES) --max-scrolls $(JOBRIGHT_MAX_SCROLLS)
 
 watch-linkedin:
-	node sites/linkedin/scraper.js --watch --watch-interval-minutes $(WATCH_INTERVAL_MINUTES)
+	@printf '%s\n' 'LinkedIn scraper disabled; skipping watch.'
 
 watch-builtin:
 	node sites/builtin/scraper.js --watch --watch-interval-minutes $(WATCH_INTERVAL_MINUTES)
@@ -81,7 +81,7 @@ docker-scrape:
 	docker compose run --rm scrape
 
 docker-watch:
-	docker compose up -d jobright-watch linkedin-watch builtin-watch simplify-watch diversityjobs-watch remoteyeah-watch remotehunter-watch hiringcafe-watch
+	docker compose up -d jobright-watch builtin-watch simplify-watch diversityjobs-watch remoteyeah-watch remotehunter-watch hiringcafe-watch
 
 docker-down:
 	docker compose down

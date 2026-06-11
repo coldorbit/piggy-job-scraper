@@ -14,7 +14,6 @@ env:
   REGISTRY: ghcr.io
   WATCH_SERVICES: >-
     jobright-watch
-    linkedin-watch
     builtin-watch
     simplify-watch
     diversityjobs-watch
@@ -101,5 +100,5 @@ jobs:
             "cd '$EC2_DEPLOY_PATH' \
               && echo '$GHCR_TOKEN' | docker login ghcr.io -u '$GHCR_USERNAME' --password-stdin \
               && SCRAPER_IMAGE='$SCRAPER_IMAGE' docker compose pull $WATCH_SERVICES \
-              && SCRAPER_IMAGE='$SCRAPER_IMAGE' docker compose up -d $WATCH_SERVICES \
+              && SCRAPER_IMAGE='$SCRAPER_IMAGE' docker compose up -d --remove-orphans $WATCH_SERVICES \
               && docker image prune -f"
