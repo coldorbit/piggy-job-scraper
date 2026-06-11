@@ -481,9 +481,12 @@ async function runScraper(args) {
   const jobs = await scrapeLinkedIn(args);
   console.log(`Found ${jobs.length} LinkedIn jobs posted within the last 24 hours.`);
 
-  const { insertedOrUpdated, savedUrls = [] } = await saveJobsToPostgres(jobs);
+  const { insertedOrUpdated, skippedDuplicates = 0, savedUrls = [] } = await saveJobsToPostgres(jobs);
   await hideExistingLinkedInDisallowedWorkplaceRows();
   console.log(`Saved ${insertedOrUpdated} LinkedIn jobs to PostgreSQL.`);
+  if (skippedDuplicates) {
+    console.log(`Skipped ${skippedDuplicates} already-stored LinkedIn job(s).`);
+  }
 
   const savedUrlSet = new Set(savedUrls);
   const newJobs = jobs.filter((job) => job.url && savedUrlSet.has(job.url));
