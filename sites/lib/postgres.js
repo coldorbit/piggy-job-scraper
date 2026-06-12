@@ -137,7 +137,6 @@ export async function ensureJobsTable() {
   await ensureDuplicateKeyColumn();
   await ensureHiddenJobColumns();
   await runOptionalExistingRowCleanup();
-  await backfillRoleFamilies();
   initialized = true;
 }
 
@@ -208,8 +207,6 @@ async function ensureDuplicateKeyColumn() {
       allowNull: true,
     });
   }
-
-  await backfillDuplicateKeys();
 }
 
 async function runOptionalExistingRowCleanup() {
@@ -245,38 +242,6 @@ async function ensureHiddenJobColumns() {
       allowNull: true,
     });
   }
-}
-
-async function backfillDuplicateKeys() {
-  const ScrapedJob = getScrapedJobModel();
-  let rows;
-
-  do {
-    rows = await ScrapedJob.findAll({
-      attributes: ['id', 'url', 'title', 'company', 'location', 'rawJob'],
-      where: {
-        duplicateKey: { [Op.is]: null },
-      },
-      limit: 1000,
-    });
-
-    for (let index = 0; index < rows.length; index += 25) {
-      const batch = rows.slice(index, index + 25);
-      await Promise.all(
-        batch.map((row) =>
-          row.update({
-            duplicateKey: duplicateKeyForJob({
-              ...row.rawJob,
-              url: row.url,
-              title: row.title,
-              company: row.company,
-              location: row.location,
-            }),
-          }),
-        ),
-      );
-    }
-  } while (rows.length === 1000);
 }
 
 async function deleteExistingDuplicateRows() {
@@ -320,53 +285,6 @@ async function deleteExistingNonEnglishRows() {
 
     if (nonEnglishIds.length) {
       await ScrapedJob.destroy({ where: { id: { [Op.in]: nonEnglishIds } } });
-    }
-  } while (rows.length === 1000);
-}
-
-async function backfillRoleFamilies() {
-  const ScrapedJob = getScrapedJobModel();
-  let rows;
-  let lastId = 0;
-
-  do {
-    rows = await ScrapedJob.findAll({
-      attributes: ['id', 'url', 'sourceUrl', 'title', 'company', 'location', 'category', 'listingText', 'rawJob'],
-      where: { id: { [Op.gt]: lastId } },
-      order: [['id', 'ASC']],
-      limit: 1000,
-    });
-    if (rows.length) lastId = rows.at(-1).id;
-
-    for (let index = 0; index < rows.length; index += 25) {
-      const batch = rows.slice(index, index + 25);
-      await Promise.all(
-        batch.map((row) => {
-          const taggedJob = tagJobRoleFamily({
-            ...(row.rawJob || {}),
-            url: row.url,
-            sourceUrl: row.sourceUrl,
-            title: row.title,
-            company: row.company,
-            location: row.location,
-            category: row.category,
-            listingText: row.listingText,
-          });
-
-          if (row.category === taggedJob.roleFamily && row.rawJob?.roleFamily === taggedJob.roleFamily) {
-            return Promise.resolve();
-          }
-
-          return row.update({
-            category: taggedJob.roleFamily,
-            rawJob: {
-              ...(row.rawJob || {}),
-              roleFamily: taggedJob.roleFamily,
-              category: taggedJob.roleFamily,
-            },
-          });
-        }),
-      );
     }
   } while (rows.length === 1000);
 }
