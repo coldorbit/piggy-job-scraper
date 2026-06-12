@@ -2,12 +2,11 @@ WATCH_INTERVAL_MINUTES ?= 5
 JOBRIGHT_MAX_SCROLLS ?= 30
 REMOTEHUNTER_MAX_SCROLLS ?= 10
 
-.PHONY: help install-browsers install-python scrape scrape-jobright scrape-linkedin scrape-builtin scrape-simplify scrape-diversityjobs scrape-remoteyeah scrape-remotehunter scrape-hiringcafe watch watch-jobright watch-linkedin watch-builtin watch-simplify watch-diversityjobs watch-remoteyeah watch-remotehunter watch-hiringcafe docker-build docker-scrape docker-watch docker-down
+.PHONY: help install-browsers scrape scrape-jobright scrape-linkedin scrape-builtin scrape-simplify scrape-diversityjobs scrape-remoteyeah scrape-remotehunter scrape-hiringcafe watch watch-jobright watch-linkedin watch-builtin watch-simplify watch-diversityjobs watch-remoteyeah watch-remotehunter watch-hiringcafe docker-build docker-scrape docker-watch docker-down
 
 help:
 	@printf '%s\n' \
 		'Targets:' \
-		'  make install-python   Install Python deps for legacy helper scripts' \
 		'  make watch            Watch all sources in parallel' \
 		'  make scrape           Scrape all sources once' \
 		'  make docker-build     Build the Docker image' \
@@ -17,9 +16,6 @@ help:
 
 install-browsers:
 	pnpm install:browsers
-
-install-python:
-	python3 -m pip install -r requirements.txt
 
 scrape: scrape-jobright scrape-builtin scrape-simplify scrape-diversityjobs scrape-remoteyeah scrape-remotehunter scrape-hiringcafe
 

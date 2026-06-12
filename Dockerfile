@@ -11,6 +11,5 @@ COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile --prod
 
 COPY sites ./sites
-COPY scripts ./scripts
 
 CMD ["pnpm", "watch"]
