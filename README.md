@@ -23,8 +23,14 @@ Optional runtime settings:
 ```text
 WATCH_INTERVAL_MINUTES=5
 JOBRIGHT_MAX_SCROLLS=30
+JOBRIGHT_US_URLS=
+JOBRIGHT_CA_URLS=
+JOBRIGHT_US_STORAGE_STATE=.auth/jobright-us.json
+JOBRIGHT_CA_STORAGE_STATE=.auth/jobright-ca.json
 REMOTEHUNTER_MAX_SCROLLS=10
 ```
+
+Jobright runs US and Canada as separate scrapers because the site only allows one selected country per session. Save the US account session to `.auth/jobright-us.json` and the Canada account session to `.auth/jobright-ca.json`.
 
 Existing rows are preserved by default during scraper startup. Destructive cleanup can be enabled only when you explicitly intend to prune old data:
 
@@ -46,6 +52,7 @@ Run one source:
 
 ```bash
 pnpm jobright:scrape -- --max-scrolls 30
+pnpm jobright:ca:scrape -- --max-scrolls 30
 pnpm builtin:watch -- --watch-interval-minutes 10
 ```
 
@@ -66,7 +73,7 @@ docker compose run --rm scrape
 Start all watcher containers:
 
 ```bash
-docker compose up -d jobright-watch builtin-watch simplify-watch diversityjobs-watch remoteyeah-watch remotehunter-watch hiringcafe-watch
+docker compose up -d jobright-watch jobright-ca-watch builtin-watch simplify-watch diversityjobs-watch remoteyeah-watch remotehunter-watch hiringcafe-watch
 ```
 
 View logs:
@@ -103,7 +110,7 @@ Edit `.env`, then run:
 
 ```bash
 docker compose build
-docker compose up -d jobright-watch builtin-watch simplify-watch diversityjobs-watch remoteyeah-watch remotehunter-watch hiringcafe-watch
+docker compose up -d jobright-watch jobright-ca-watch builtin-watch simplify-watch diversityjobs-watch remoteyeah-watch remotehunter-watch hiringcafe-watch
 ```
 
 ## GitHub Actions Deployment

@@ -7,6 +7,28 @@ services:
     command:
       - node
       - sites/jobright/scraper.js
+      - --country
+      - us
+      - --watch
+      - --watch-interval-minutes
+      - ${WATCH_INTERVAL_MINUTES:-5}
+      - --max-scrolls
+      - ${JOBRIGHT_MAX_SCROLLS:-30}
+    env_file:
+      - .env
+    volumes:
+      - ./.auth:/app/.auth:ro
+    restart: unless-stopped
+    init: true
+
+  jobright-ca-watch:
+    image: *scraper_image
+    build: .
+    command:
+      - node
+      - sites/jobright/scraper.js
+      - --country
+      - ca
       - --watch
       - --watch-interval-minutes
       - ${WATCH_INTERVAL_MINUTES:-5}
@@ -112,7 +134,8 @@ services:
       - sh
       - -c
       - >
-        node sites/jobright/scraper.js --max-scrolls "${JOBRIGHT_MAX_SCROLLS:-30}"
+        node sites/jobright/scraper.js --country us --max-scrolls "${JOBRIGHT_MAX_SCROLLS:-30}"
+        && node sites/jobright/scraper.js --country ca --max-scrolls "${JOBRIGHT_MAX_SCROLLS:-30}"
         && node sites/builtin/scraper.js
         && node sites/simplify/scraper.js
         && node sites/diversityjobs/scraper.js

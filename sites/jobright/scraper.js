@@ -17,7 +17,29 @@ const DEFAULT_JOBRIGHT_SEARCHES = [
   'frontend engineer',
   'data scientist',
 ];
-const DEFAULT_JOBRIGHT_URLS = DEFAULT_JOBRIGHT_SEARCHES.map(searchToJobrightUrl);
+const JOBRIGHT_COUNTRIES = {
+  us: {
+    label: 'United States',
+    defaultLocation: 'United States',
+    urlLocationSlug: 'remote-united-states',
+    envUrls: 'JOBRIGHT_US_URLS',
+    envStorageState: 'JOBRIGHT_US_STORAGE_STATE',
+    defaultStorageState: '.auth/jobright-us.json',
+    locationPattern: /\b(united states|usa|u\.s\.|us remote|remote,\s*us|remote us)\b/i,
+    cardLocationPattern:
+      /\b((?:[A-Z][A-Za-z .'-]+,\s*)?United States|USA|U\.S\.|Remote,\s*US|US Remote)\b/i,
+  },
+  ca: {
+    label: 'Canada',
+    defaultLocation: 'Canada',
+    urlLocationSlug: 'remote-canada',
+    envUrls: 'JOBRIGHT_CA_URLS',
+    envStorageState: 'JOBRIGHT_CA_STORAGE_STATE',
+    defaultStorageState: '.auth/jobright-ca.json',
+    locationPattern: /\b(canada|canadian|remote,\s*canada|remote canada)\b/i,
+    cardLocationPattern: /\b((?:[A-Z][A-Za-z .'-]+,\s*)?Canada|Remote,\s*Canada|Canada Remote)\b/i,
+  },
+};
 const APPLY_NOW_TEXT = 'apply now';
 const APPLY_WITH_AUTOFILL_TEXT = 'apply with autofill';
 const APPLY_MODE_LABELS = {
@@ -28,7 +50,8 @@ const ORIGINAL_JOB_POST_XPATH =
   '//*[@id="jobs-page-main-content"]/div[1]/section/div/div[2]/div[2]/div/div[2]/div[3]/a';
 
 const DEFAULT_ARGS = {
-  urls: envUrls(process.env.JOBRIGHT_URLS),
+  country: normalizeCountry(process.env.JOBRIGHT_COUNTRY || 'us'),
+  urls: [],
   urlsFile: '',
   slackWebhookUrl: process.env.SLACK_WEBHOOK_URL || '',
   slackChannel: process.env.SLACK_CHANNEL || '',
@@ -39,7 +62,7 @@ const DEFAULT_ARGS = {
   timeoutMs: 60000,
   descriptionLimit: 0,
   detailConcurrency: 3,
-  storageState: process.env.JOBRIGHT_STORAGE_STATE || '.auth/jobright.json',
+  storageState: '',
   skipDescriptions: false,
   debug: false,
   headless: true,
@@ -50,6 +73,7 @@ function parseArgs(argv) {
   const args = { ...DEFAULT_ARGS, urls: [...DEFAULT_ARGS.urls] };
   const aliases = {
     '--start-url': 'startUrl',
+    '--country': 'country',
     '--urls-file': 'urlsFile',
     '--slack-webhook-url': 'slackWebhookUrl',
     '--slack-channel': 'slackChannel',
@@ -126,11 +150,32 @@ function parseArgs(argv) {
     index += 1;
   }
 
+  args.country = normalizeCountry(args.country);
+  const country = countryConfig(args.country);
+  const legacyUrls = args.country === 'us' ? process.env.JOBRIGHT_URLS : '';
+  args.urls = args.urls.length ? args.urls : envUrls(process.env[country.envUrls] || legacyUrls);
+  args.storageState =
+    args.storageState ||
+    process.env[country.envStorageState] ||
+    process.env.JOBRIGHT_STORAGE_STATE ||
+    country.defaultStorageState;
+
   return args;
 }
 
 function printHelp() {
-  console.log(`Jobright remote US tech job scraper\n\nUsage:\n  node sites/jobright/scraper.js [options]\n\nOptions:\n  --url URL                  Jobright search page to scrape; repeat for multiple URLs\n  --start-url URL            Backward-compatible alias for a single Jobright search page\n  --urls-file PATH           Text file with one Jobright search URL per line\n  --slack-webhook-url URL    Slack incoming webhook URL, or use SLACK_WEBHOOK_URL\n  --slack-channel NAME       Optional channel override for compatible webhooks\n  --watch                    Keep polling Jobright and posting newly inserted jobs\n  --watch-interval-minutes N Minutes between watch runs, default 5\n  --limit N                  Maximum jobs to save, 0 means no limit\n  --max-scrolls N            Scroll attempts, default 40\n  --scroll-pause-ms N        Delay after each scroll, default 900\n  --timeout-ms N             Playwright timeout, default 60000\n  --description-limit N      Detail pages to open, 0 means all\n  --detail-concurrency N     Detail page concurrency, default 3\n  --storage-state PATH       Playwright logged-in storage state, default .auth/jobright.json\n  --skip-descriptions        Do not scrape detail-page descriptions\n  --headless / --no-headless Browser visibility, default headless\n  --no-slack                 Disable Slack posting for this run\n  --debug                    Print card-detection diagnostics\n`);
+  console.log(`Jobright remote tech job scraper\n\nUsage:\n  node sites/jobright/scraper.js [options]\n\nOptions:\n  --country us|ca            Country to scrape, default us or JOBRIGHT_COUNTRY\n  --url URL                  Jobright search page to scrape; repeat for multiple URLs\n  --start-url URL            Backward-compatible alias for a single Jobright search page\n  --urls-file PATH           Text file with one Jobright search URL per line\n  --slack-webhook-url URL    Slack incoming webhook URL, or use SLACK_WEBHOOK_URL\n  --slack-channel NAME       Optional channel override for compatible webhooks\n  --watch                    Keep polling Jobright and posting newly inserted jobs\n  --watch-interval-minutes N Minutes between watch runs, default 5\n  --limit N                  Maximum jobs to save, 0 means no limit\n  --max-scrolls N            Scroll attempts, default 40\n  --scroll-pause-ms N        Delay after each scroll, default 900\n  --timeout-ms N             Playwright timeout, default 60000\n  --description-limit N      Detail pages to open, 0 means all\n  --detail-concurrency N     Detail page concurrency, default 3\n  --storage-state PATH       Playwright logged-in storage state, default .auth/jobright-us.json or .auth/jobright-ca.json\n  --skip-descriptions        Do not scrape detail-page descriptions\n  --headless / --no-headless Browser visibility, default headless\n  --no-slack                 Disable Slack posting for this run\n  --debug                    Print card-detection diagnostics\n`);
+}
+
+function normalizeCountry(value) {
+  const normalized = cleanWhitespace(value).toLowerCase();
+  if (['us', 'usa', 'united-states', 'united states'].includes(normalized)) return 'us';
+  if (['ca', 'canada'].includes(normalized)) return 'ca';
+  throw new Error(`Unsupported Jobright country "${value}". Expected "us" or "ca".`);
+}
+
+function countryConfig(country) {
+  return JOBRIGHT_COUNTRIES[normalizeCountry(country)];
 }
 
 function envUrls(value) {
@@ -175,9 +220,10 @@ function originalJobUrlFromHref(href) {
   return '';
 }
 
-function searchToJobrightUrl(search) {
+function searchToJobrightUrl(search, country) {
+  const config = countryConfig(country);
   const slug = cleanWhitespace(search).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  return `${BASE_URL}/jobs/${slug}-jobs-in-remote-united-states`;
+  return `${BASE_URL}/jobs/${slug}-jobs-in-${config.urlLocationSlug}`;
 }
 
 async function readUrlFile(path) {
@@ -200,12 +246,13 @@ async function existingStorageState(path) {
 }
 
 async function resolveSourceUrls(args) {
+  const defaultUrls = DEFAULT_JOBRIGHT_SEARCHES.map((search) => searchToJobrightUrl(search, args.country));
   const urls = [
     ...args.urls,
     ...(args.startUrl ? [args.startUrl] : []),
     ...(await readUrlFile(args.urlsFile)),
   ];
-  const uniqueUrls = [...new Set(urls.length ? urls : DEFAULT_JOBRIGHT_URLS)];
+  const uniqueUrls = [...new Set(urls.length ? urls : defaultUrls)];
   for (const url of uniqueUrls) {
     const parsed = new URL(url);
     if (!parsed.hostname.endsWith('jobright.ai')) {
@@ -257,11 +304,11 @@ function isRecent(postedAt, now = new Date()) {
   return postedAt.getTime() >= now.getTime() - 24 * 60 * 60 * 1000;
 }
 
-function isRemoteUs(text) {
+function isRemoteForCountry(text, country) {
+  const config = countryConfig(country);
   const normalized = cleanWhitespace(text).toLowerCase();
   const hasRemote = /\b(remote|work from home|wfh)\b/i.test(normalized);
-  const hasUs = /\b(united states|usa|u\.s\.|us remote|remote, us|remote us)\b/i.test(normalized);
-  return hasRemote && hasUs;
+  return hasRemote && config.locationPattern.test(normalized);
 }
 
 function applyModeFromText(text) {
@@ -280,7 +327,8 @@ function applyModeFromActions(actions) {
   return '';
 }
 
-function parseCardText(text) {
+function parseCardText(text, country) {
+  const config = countryConfig(country);
   const lines = cleanLines(text);
   let compact = lines.join(' ');
   const postedText = postedTextFromCard(compact);
@@ -303,9 +351,7 @@ function parseCardText(text) {
     title = beforeCompany;
   }
 
-  const locationMatch = afterCompany.match(
-    /\b((?:[A-Z][A-Za-z .'-]+,\s*)?United States|USA|U\.S\.|Remote,\s*US|US Remote)\b/,
-  );
+  const locationMatch = afterCompany.match(config.cardLocationPattern);
   if (locationMatch) location = locationMatch[1];
 
   return { title, company, location, postedText };
@@ -375,9 +421,11 @@ function mergeNonEmpty(...objects) {
   }, {});
 }
 
-async function collectListingJobs(page, sourceUrl, debug = false, seenUrls = new Set()) {
+async function collectListingJobs(page, sourceUrl, args, seenUrls = new Set()) {
+  const config = countryConfig(args.country);
   const now = new Date();
   const scrapedAt = now.toISOString();
+  const debug = args.debug;
   const cards = await page.locator("a[href*='/jobs/info/']").evaluateAll((anchors) =>
     anchors.map((anchor) => {
       let cardRoot = anchor;
@@ -458,9 +506,9 @@ async function collectListingJobs(page, sourceUrl, debug = false, seenUrls = new
 
     const listingApplyMode = applyModeFromActions(card.actionTexts || []);
 
-    const parsed = mergeNonEmpty(parseCardText(listingText), card);
+    const parsed = mergeNonEmpty(parseCardText(listingText, args.country), card);
     const filterText = [listingText, parsed.location, parsed.workMode].filter(Boolean).join(' ');
-    if (!isRemoteUs(filterText)) continue;
+    if (!isRemoteForCountry(filterText, args.country)) continue;
 
     const postedAt = parsePostedTime(parsed.postedText, now);
     if (!isRecent(postedAt, now)) continue;
@@ -468,7 +516,7 @@ async function collectListingJobs(page, sourceUrl, debug = false, seenUrls = new
     jobs.push({
       title: cleanWhitespace(parsed.title),
       company: cleanWhitespace(parsed.company),
-      location: cleanWhitespace(parsed.location) || 'United States',
+      location: cleanWhitespace(parsed.location) || config.defaultLocation,
       postedText: cleanWhitespace(parsed.postedText),
       postedAt: postedAt ? postedAt.toISOString() : '',
       url,
@@ -484,29 +532,30 @@ async function collectListingJobs(page, sourceUrl, debug = false, seenUrls = new
   return jobs;
 }
 
-async function scrollAndCollectListingJobs(page, maxScrolls, pauseMs, debug = false) {
+async function scrollAndCollectListingJobs(page, args) {
   const jobs = [];
   const seenUrls = new Set();
   let previousHeight = 0;
   let stableRounds = 0;
 
-  for (let index = 0; index <= maxScrolls; index += 1) {
-    jobs.push(...(await collectListingJobs(page, page.url(), debug, seenUrls)));
+  for (let index = 0; index <= args.maxScrolls; index += 1) {
+    jobs.push(...(await collectListingJobs(page, page.url(), args, seenUrls)));
 
     const currentHeight = await page.evaluate(() => document.body.scrollHeight);
     stableRounds = currentHeight === previousHeight ? stableRounds + 1 : 0;
-    if (stableRounds >= 3 || index === maxScrolls) break;
+    if (stableRounds >= 3 || index === args.maxScrolls) break;
 
     previousHeight = currentHeight;
     const scrollDistance = Math.round((page.viewportSize()?.height || 1000) * 0.8);
     await page.mouse.wheel(0, scrollDistance);
-    await page.waitForTimeout(pauseMs);
+    await page.waitForTimeout(args.scrollPauseMs);
   }
 
   return jobs;
 }
 
 async function scrapeJobrightJobs(args, context) {
+  const config = countryConfig(args.country);
   const sourceUrls = await resolveSourceUrls(args);
   const allJobs = [];
   const seenUrls = new Set();
@@ -515,7 +564,7 @@ async function scrapeJobrightJobs(args, context) {
   try {
     for (let sourceIndex = 0; sourceIndex < sourceUrls.length; sourceIndex += 1) {
       const sourceUrl = sourceUrls[sourceIndex];
-      console.log(`Jobright source ${sourceIndex + 1}/${sourceUrls.length}: ${sourceUrl}`);
+      console.log(`Jobright ${config.label} source ${sourceIndex + 1}/${sourceUrls.length}: ${sourceUrl}`);
       await page.goto(sourceUrl, { waitUntil: 'domcontentloaded', timeout: args.timeoutMs });
       await waitForQuietPage(page, args.timeoutMs);
       await maybeAcceptPopups(page);
@@ -525,13 +574,10 @@ async function scrapeJobrightJobs(args, context) {
         { timeout: args.timeoutMs },
       );
 
-      const sourceJobs = await scrollAndCollectListingJobs(
-        page,
-        args.maxScrolls,
-        args.scrollPauseMs,
-        args.debug,
+      const sourceJobs = await scrollAndCollectListingJobs(page, args);
+      console.log(
+        `Jobright ${config.label} source ${sourceIndex + 1}/${sourceUrls.length} collected ${sourceJobs.length} candidate job(s).`,
       );
-      console.log(`Jobright source ${sourceIndex + 1}/${sourceUrls.length} collected ${sourceJobs.length} candidate job(s).`);
 
       for (const job of filterExcludedEngineeringRoles(sourceJobs)) {
         if (seenUrls.has(job.url)) {
@@ -856,6 +902,7 @@ function hideApplyNowJobsByDefault(jobs) {
 }
 
 async function runScraper(args) {
+  const config = countryConfig(args.country);
   const browser = await chromium.launch({
     headless: args.headless,
     args: ['--disable-blink-features=AutomationControlled'],
@@ -873,11 +920,13 @@ async function runScraper(args) {
   let jobs = [];
   try {
     jobs = await scrapeJobrightJobs(args, context);
-    console.log(`Found ${jobs.length} remote US tech jobs posted within the last 24 hours.`);
+    console.log(`Found ${jobs.length} remote ${config.label} tech jobs posted within the last 24 hours.`);
 
     jobs = await filterEligibleJobDetails(context, jobs, args);
     jobs = hideApplyNowJobsByDefault(jobs);
-    console.log(`Kept ${jobs.length} English-only Jobright jobs with Apply Now or Apply with Autofill.`);
+    console.log(
+      `Kept ${jobs.length} English-only Jobright ${config.label} jobs with Apply Now or Apply with Autofill.`,
+    );
   } finally {
     await context.close();
     await browser.close();
@@ -904,6 +953,7 @@ async function runScraper(args) {
 }
 
 async function watchScraper(args) {
+  const config = countryConfig(args.country);
   const intervalMs = Math.max(args.watchIntervalMinutes, 1) * 60 * 1000;
   let shouldStop = false;
 
@@ -915,7 +965,7 @@ async function watchScraper(args) {
   }
 
   console.log(
-    `Watching Jobright every ${Math.round(intervalMs / 60000)} minute(s). Press Ctrl+C to stop.`,
+    `Watching Jobright ${config.label} every ${Math.round(intervalMs / 60000)} minute(s). Press Ctrl+C to stop.`,
   );
 
   while (!shouldStop) {
