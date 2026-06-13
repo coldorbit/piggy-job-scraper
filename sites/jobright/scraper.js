@@ -20,6 +20,7 @@ const DEFAULT_JOBRIGHT_SEARCHES = [
 const JOBRIGHT_COUNTRIES = {
   us: {
     label: 'United States',
+    dbLocation: 'usa',
     defaultLocation: 'United States',
     urlLocationSlug: 'remote-united-states',
     envUrls: 'JOBRIGHT_US_URLS',
@@ -31,6 +32,7 @@ const JOBRIGHT_COUNTRIES = {
   },
   ca: {
     label: 'Canada',
+    dbLocation: 'canada',
     defaultLocation: 'Canada',
     urlLocationSlug: 'remote-canada',
     envUrls: 'JOBRIGHT_CA_URLS',
@@ -516,7 +518,8 @@ async function collectListingJobs(page, sourceUrl, args, seenUrls = new Set()) {
     jobs.push({
       title: cleanWhitespace(parsed.title),
       company: cleanWhitespace(parsed.company),
-      location: cleanWhitespace(parsed.location) || config.defaultLocation,
+      location: config.dbLocation,
+      jobrightLocation: cleanWhitespace(parsed.location) || config.defaultLocation,
       postedText: cleanWhitespace(parsed.postedText),
       postedAt: postedAt ? postedAt.toISOString() : '',
       url,
