@@ -48,8 +48,6 @@ const APPLY_MODE_LABELS = {
   [APPLY_NOW_TEXT]: 'Apply Now',
   [APPLY_WITH_AUTOFILL_TEXT]: 'Apply with Autofill',
 };
-const ORIGINAL_JOB_POST_XPATH =
-  '//*[@id="jobs-page-main-content"]/div[1]/section/div/div[2]/div[2]/div/div[2]/div[3]/a';
 
 const DEFAULT_ARGS = {
   country: normalizeCountry(process.env.JOBRIGHT_COUNTRY || 'us'),
@@ -316,17 +314,19 @@ function isRemoteForCountry(text, country) {
 function applyModeFromText(text) {
   const normalized = cleanWhitespace(text).toLowerCase();
   if (!normalized) return '';
-  if (normalized.includes(APPLY_NOW_TEXT)) return APPLY_MODE_LABELS[APPLY_NOW_TEXT];
   if (normalized.includes(APPLY_WITH_AUTOFILL_TEXT)) return APPLY_MODE_LABELS[APPLY_WITH_AUTOFILL_TEXT];
+  if (normalized.includes(APPLY_NOW_TEXT)) return APPLY_MODE_LABELS[APPLY_NOW_TEXT];
   return '';
 }
 
 function applyModeFromActions(actions) {
+  let fallbackApplyMode = '';
   for (const text of actions) {
     const applyMode = applyModeFromText(text);
-    if (applyMode) return applyMode;
+    if (applyMode === APPLY_MODE_LABELS[APPLY_WITH_AUTOFILL_TEXT]) return applyMode;
+    if (applyMode && !fallbackApplyMode) fallbackApplyMode = applyMode;
   }
-  return '';
+  return fallbackApplyMode;
 }
 
 function parseCardText(text, country) {
@@ -507,6 +507,7 @@ async function collectListingJobs(page, sourceUrl, args, seenUrls = new Set()) {
     if (debug && seenUrls.size <= 5) console.log(`Card ${seenUrls.size}: ${listingText.slice(0, 300)}`);
 
     const listingApplyMode = applyModeFromActions(card.actionTexts || []);
+    if (listingApplyMode !== APPLY_MODE_LABELS[APPLY_WITH_AUTOFILL_TEXT]) continue;
 
     const parsed = mergeNonEmpty(parseCardText(listingText, args.country), card);
     const filterText = [listingText, parsed.location, parsed.workMode].filter(Boolean).join(' ');
@@ -701,13 +702,38 @@ async function eligibleApplyMode(page) {
 }
 
 async function extractOriginalJobPostUrl(page) {
-  const xpathHref = await page
-    .locator(`xpath=${ORIGINAL_JOB_POST_XPATH}`)
+  const href = await page
+    .locator('a', { hasText: /original job post/i })
     .first()
     .getAttribute('href', { timeout: 1500 })
     .catch(() => '');
-  const xpathUrl = originalJobUrlFromHref(xpathHref);
-  if (xpathUrl) return xpathUrl;
+  const directUrl = originalJobUrlFromHref(href);
+  if (directUrl) return directUrl;
+
+  const nearbyHref = await page.evaluate(() => {
+    const normalizedText = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const textNodes = [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      if (normalizedText(node.textContent).includes('original job post')) textNodes.push(node);
+    }
+
+    for (const node of textNodes) {
+      let current = node.parentElement;
+      for (let depth = 0; current && depth < 5; depth += 1) {
+        if (current.matches?.('a[href]')) return current.getAttribute('href') || '';
+        const link = current.querySelector?.('a[href]');
+        if (link) return link.getAttribute('href') || '';
+        current = current.parentElement;
+      }
+    }
+
+    return '';
+  }).catch(() => '');
+
+  const nearbyUrl = originalJobUrlFromHref(nearbyHref);
+  if (nearbyUrl) return nearbyUrl;
 
   return '';
 }
@@ -736,9 +762,9 @@ async function inspectJobDetail(context, job, options) {
     const hasAutofillApplyMode =
       job.applyMode === APPLY_MODE_LABELS[APPLY_WITH_AUTOFILL_TEXT] ||
       detailApplyMode === APPLY_MODE_LABELS[APPLY_WITH_AUTOFILL_TEXT];
-    job.applyMode = detailApplyMode || job.applyMode;
+    job.applyMode = hasAutofillApplyMode ? APPLY_MODE_LABELS[APPLY_WITH_AUTOFILL_TEXT] : detailApplyMode || job.applyMode;
     if (!job.applyMode) {
-      if (debug) console.log(`Skipping Jobright job without Apply Now or Apply with Autofill: ${job.url}`);
+      if (debug) console.log(`Skipping Jobright job without Apply with Autofill: ${job.url}`);
       return null;
     }
 
@@ -897,13 +923,6 @@ function sleep(ms) {
   });
 }
 
-function hideApplyNowJobsByDefault(jobs) {
-  return jobs.map((job) => ({
-    ...job,
-    isHidden: job.applyMode === APPLY_MODE_LABELS[APPLY_NOW_TEXT],
-  }));
-}
-
 async function runScraper(args) {
   const config = countryConfig(args.country);
   const browser = await chromium.launch({
@@ -926,9 +945,8 @@ async function runScraper(args) {
     console.log(`Found ${jobs.length} remote ${config.label} tech jobs posted within the last 24 hours.`);
 
     jobs = await filterEligibleJobDetails(context, jobs, args);
-    jobs = hideApplyNowJobsByDefault(jobs);
     console.log(
-      `Kept ${jobs.length} English-only Jobright ${config.label} jobs with Apply Now or Apply with Autofill.`,
+      `Kept ${jobs.length} English-only Jobright ${config.label} jobs with Apply with Autofill on the card.`,
     );
   } finally {
     await context.close();
