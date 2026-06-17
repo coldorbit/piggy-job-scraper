@@ -55,34 +55,6 @@ services:
     restart: unless-stopped
     init: true
 
-  simplify-watch:
-    image: *scraper_image
-    build: .
-    command:
-      - node
-      - sites/simplify/scraper.js
-      - --watch
-      - --watch-interval-minutes
-      - ${WATCH_INTERVAL_MINUTES:-5}
-    env_file:
-      - .env
-    restart: unless-stopped
-    init: true
-
-  diversityjobs-watch:
-    image: *scraper_image
-    build: .
-    command:
-      - node
-      - sites/diversityjobs/scraper.js
-      - --watch
-      - --watch-interval-minutes
-      - ${WATCH_INTERVAL_MINUTES:-5}
-    env_file:
-      - .env
-    restart: unless-stopped
-    init: true
-
   remoteyeah-watch:
     image: *scraper_image
     build: .
@@ -137,8 +109,6 @@ services:
         node sites/jobright/scraper.js --country us --max-scrolls "${JOBRIGHT_MAX_SCROLLS:-30}"
         && node sites/jobright/scraper.js --country ca --max-scrolls "${JOBRIGHT_MAX_SCROLLS:-30}"
         && node sites/builtin/scraper.js
-        && node sites/simplify/scraper.js
-        && node sites/diversityjobs/scraper.js
         && node sites/remoteyeah/scraper.js
         && node sites/remotehunter/scraper.js --max-scrolls "${REMOTEHUNTER_MAX_SCROLLS:-10}"
         && node sites/hiringcafe/scraper.js

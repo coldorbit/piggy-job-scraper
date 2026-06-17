@@ -73,7 +73,7 @@ docker compose run --rm scrape
 Start all watcher containers:
 
 ```bash
-docker compose up -d jobright-watch jobright-ca-watch builtin-watch simplify-watch diversityjobs-watch remoteyeah-watch remotehunter-watch hiringcafe-watch
+docker compose up -d jobright-watch jobright-ca-watch builtin-watch remoteyeah-watch remotehunter-watch hiringcafe-watch
 ```
 
 View logs:
@@ -110,7 +110,7 @@ Edit `.env`, then run:
 
 ```bash
 docker compose build
-docker compose up -d jobright-watch jobright-ca-watch builtin-watch simplify-watch diversityjobs-watch remoteyeah-watch remotehunter-watch hiringcafe-watch
+docker compose up -d jobright-watch jobright-ca-watch builtin-watch remoteyeah-watch remotehunter-watch hiringcafe-watch
 ```
 
 ## GitHub Actions Deployment
