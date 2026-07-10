@@ -17,7 +17,7 @@ help:
 install-browsers:
 	pnpm install:browsers
 
-scrape: scrape-jobright scrape-jobright-ca scrape-builtin scrape-remoteyeah scrape-remotehunter scrape-hiringcafe
+scrape: scrape-jobright scrape-jobright-ca scrape-builtin scrape-remotehunter scrape-hiringcafe
 
 scrape-jobright:
 	pnpm jobright:scrape -- --max-scrolls $(JOBRIGHT_MAX_SCROLLS)
@@ -38,7 +38,7 @@ scrape-diversityjobs:
 	@printf '%s\n' 'DiversityJobs scraper disabled; skipping.'
 
 scrape-remoteyeah:
-	pnpm remoteyeah:scrape
+	@printf '%s\n' 'RemoteYeah scraper disabled; skipping.'
 
 scrape-remotehunter:
 	pnpm remotehunter:scrape -- --max-scrolls $(REMOTEHUNTER_MAX_SCROLLS)
@@ -47,7 +47,7 @@ scrape-hiringcafe:
 	pnpm hiringcafe:scrape
 
 watch:
-	$(MAKE) -j6 watch-jobright watch-jobright-ca watch-builtin watch-remoteyeah watch-remotehunter watch-hiringcafe
+	$(MAKE) -j5 watch-jobright watch-jobright-ca watch-builtin watch-remotehunter watch-hiringcafe
 
 watch-jobright:
 	node sites/jobright/scraper.js --country us --watch --watch-interval-minutes $(WATCH_INTERVAL_MINUTES) --max-scrolls $(JOBRIGHT_MAX_SCROLLS)
@@ -68,7 +68,7 @@ watch-diversityjobs:
 	@printf '%s\n' 'DiversityJobs scraper disabled; skipping watch.'
 
 watch-remoteyeah:
-	node sites/remoteyeah/scraper.js --watch --watch-interval-minutes $(WATCH_INTERVAL_MINUTES)
+	@printf '%s\n' 'RemoteYeah scraper disabled; skipping watch.'
 
 watch-remotehunter:
 	node sites/remotehunter/scraper.js --watch --watch-interval-minutes $(WATCH_INTERVAL_MINUTES) --max-scrolls $(REMOTEHUNTER_MAX_SCROLLS)
@@ -83,7 +83,7 @@ docker-scrape:
 	docker compose run --rm scrape
 
 docker-watch:
-	docker compose up -d jobright-watch jobright-ca-watch builtin-watch remoteyeah-watch remotehunter-watch hiringcafe-watch
+	docker compose up -d --remove-orphans jobright-watch jobright-ca-watch builtin-watch remotehunter-watch hiringcafe-watch
 
 docker-down:
 	docker compose down
