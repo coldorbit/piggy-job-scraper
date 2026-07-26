@@ -4,19 +4,17 @@ import fs from 'node:fs/promises';
 import { chromium } from 'playwright';
 import { saveJobsToPostgres } from '../lib/postgres.js';
 import { filterJobsPostedWithinLast24Hours } from '../lib/recency.js';
-import { filterExcludedEngineeringRoles } from '../lib/jobFilters.js';
+import { AI_ML_JOB_SEARCHES, filterExcludedEngineeringRoles } from '../lib/jobFilters.js';
 import { cleanHtmlText } from '../lib/descriptions.js';
 
 const REMOTEHUNTER_BASE_URL = 'https://www.remotehunter.com';
 const DEFAULT_REMOTEHUNTER_SEARCHES = [
   'Software Engineer',
   'Data Engineer',
-  'Machine Learning Engineer',
-  'AI Engineer',
   'Full Stack Engineer',
   'Backend Engineer',
   'Frontend Engineer',
-  'Data Scientist',
+  ...AI_ML_JOB_SEARCHES,
 ];
 
 const DEFAULT_ARGS = {

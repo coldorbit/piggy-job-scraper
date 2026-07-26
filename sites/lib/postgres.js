@@ -66,6 +66,10 @@ function getScrapedJobModel() {
       company: DataTypes.TEXT,
       location: DataTypes.TEXT,
       category: DataTypes.TEXT,
+      aiMlArea: {
+        type: DataTypes.TEXT,
+        field: 'ai_ml_area',
+      },
       postedAt: {
         type: DataTypes.DATE,
         field: 'posted_at',
@@ -135,6 +139,7 @@ export async function ensureJobsTable() {
   if (initialized) return;
   await getScrapedJobModel().sync();
   await ensureDuplicateKeyColumn();
+  await ensureAiMlAreaColumn();
   await ensureHiddenJobColumns();
   await runOptionalExistingRowCleanup();
   initialized = true;
@@ -186,6 +191,7 @@ function jobToRow(job) {
     company: taggedJob.company || null,
     location: taggedJob.location || null,
     category: taggedJob.roleFamily,
+    aiMlArea: taggedJob.aiMlArea,
     postedAt: toDate(taggedJob.postedAt),
     scrapedAt: toDate(taggedJob.scrapedAt) || new Date(),
     listingText: taggedJob.listingText || taggedJob.description || null,
@@ -203,6 +209,19 @@ async function ensureDuplicateKeyColumn() {
 
   if (!table.duplicate_key) {
     await queryInterface.addColumn('scraped_jobs', 'duplicate_key', {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    });
+  }
+}
+
+async function ensureAiMlAreaColumn() {
+  const sequelize = getSequelize();
+  const queryInterface = sequelize.getQueryInterface();
+  const table = await queryInterface.describeTable('scraped_jobs');
+
+  if (!table.ai_ml_area) {
+    await queryInterface.addColumn('scraped_jobs', 'ai_ml_area', {
       type: DataTypes.TEXT,
       allowNull: true,
     });

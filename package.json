@@ -6,6 +6,7 @@
   "type": "module",
   "packageManager": "pnpm@9.15.9",
   "scripts": {
+    "test": "node --test",
     "scrape": "pnpm jobright:scrape && pnpm jobright:ca:scrape && pnpm builtin:scrape && pnpm remotehunter:scrape && pnpm hiringcafe:scrape",
     "watch": "pnpm jobright:watch & pnpm jobright:ca:watch & pnpm builtin:watch & pnpm remotehunter:watch & pnpm hiringcafe:watch & wait",
     "jobright:scrape": "node sites/jobright/scraper.js --country us",

@@ -57,10 +57,95 @@ const NON_ENGLISH_SIGNAL_WORDS = new Set([
   'une',
   'vous',
 ]);
+export const AI_ML_JOB_SEARCHES = [
+  'machine learning engineer',
+  'ai engineer',
+  'artificial intelligence engineer',
+  'data scientist',
+  'applied scientist',
+  'research scientist machine learning',
+  'deep learning engineer',
+];
+
+const AI_ML_AREA_PATTERNS = [
+  {
+    category: 'multimodal_ml',
+    patterns: [/\bmulti[- ]?modal(?:ity)?\b/i],
+  },
+  {
+    category: 'generative_ai',
+    patterns: [
+      /\b(?:gen(?:erative)?[ -]?ai|large language models?|llms?|foundation models?|prompt engineer(?:ing)?|diffusion models?)\b/i,
+      /\b(?:retrieval[ -]?augmented generation|rag)\b/i,
+    ],
+  },
+  {
+    category: 'speech_audio_ml',
+    patterns: [
+      /\b(?:speech|audio|acoustic|voice ai|voice recognition|speaker recognition)\b/i,
+      /\b(?:automatic speech recognition|asr|text[ -]?to[ -]?speech|tts)\b/i,
+    ],
+  },
+  {
+    category: 'recommendation_systems',
+    patterns: [
+      /\b(?:recommendation systems?|recommender systems?|recommendations?|recommenders?|personalization)\b/i,
+      /\b(?:learning to rank|ranking systems?|ads relevance)\b/i,
+    ],
+  },
+  {
+    category: 'time_series_forecasting',
+    patterns: [
+      /\b(?:time[ -]?series|forecasting|forecast models?|demand forecast(?:ing)?|demand prediction)\b/i,
+    ],
+  },
+  {
+    category: 'anomaly_fraud_detection',
+    patterns: [
+      /\b(?:anomaly detection|anomalous behavior|outlier detection|fraud|fraudulent)\b/i,
+      /\b(?:financial crime|anti[ -]?money laundering)\b/i,
+    ],
+  },
+  {
+    category: 'graph_ml',
+    patterns: [
+      /\b(?:graph machine learning|graph ml|graph neural networks?|gnns?|knowledge graphs?|geometric deep learning)\b/i,
+    ],
+  },
+  {
+    category: 'robotics_control',
+    patterns: [
+      /\b(?:robotics?|robotic systems?|control systems?|controls? engineer(?:ing)?|control theory|motion planning)\b/i,
+      /\b(?:autonomous systems?|autonomous vehicles?|reinforcement learning)\b/i,
+    ],
+  },
+  {
+    category: 'computer_vision',
+    patterns: [
+      /\b(?:computer vision|machine vision|visual perception|image recognition|image segmentation)\b/i,
+      /\b(?:object detection|object tracking|video understanding|optical character recognition|ocr)\b/i,
+    ],
+  },
+  {
+    category: 'nlp',
+    patterns: [
+      /\b(?:natural language processing|nlp|computational linguistics|language understanding)\b/i,
+      /\b(?:text classification|text mining|information extraction|named entit(?:y|ies)|semantic search)\b/i,
+    ],
+  },
+  {
+    category: 'tabular_ml',
+    patterns: [
+      /\b(?:tabular (?:data|machine learning|ml)|structured data model(?:ing|ling)?|gradient boost(?:ing|ed)?)\b/i,
+      /\b(?:xgboost|lightgbm|catboost)\b/i,
+    ],
+  },
+];
+
+const AI_ML_ROLE_PATTERN =
+  /\b(?:ai|artificial intelligence|machine learning|ml|deep learning|data scien(?:ce|tist)|applied scientist|research scientist)\b/i;
+
 const SEARCH_CONTEXT_ROLE_FAMILY_PATTERNS = {
-  ai_ml: [
-    /\b(?:ai|artificial intelligence|machine learning|ml|deep learning|computer vision|nlp|llm|generative ai|data scien(?:ce|tist))\b/i,
-  ],
   data: [
     /\b(?:data engineer|data engineering|data analytics|analytics engineer|etl|elt|data warehouse|data pipeline|business intelligence|bi engineer|database engineer)\b/i,
   ],
@@ -96,12 +181,30 @@ export function filterEnglishOnlyJobs(jobs) {
 }
 
 export function roleFamilyForJob(job) {
-  if (String(job?.source || '').toLowerCase() === 'jobright') {
-    const titleRoleFamily = roleFamilyForTitle(job?.title);
-    if (titleRoleFamily) return titleRoleFamily;
-  }
+  return classifyJob(job).roleFamily;
+}
 
-  return roleFamilyForSearchContext(
+export function aiMlAreaForJob(job) {
+  return classifyJob(job).aiMlArea;
+}
+
+export function tagJobRoleFamily(job) {
+  const { roleFamily, aiMlArea } = classifyJob(job);
+  return {
+    ...job,
+    roleFamily,
+    category: roleFamily,
+    aiMlArea: aiMlArea || null,
+  };
+}
+
+export function tagJobsWithRoleFamily(jobs) {
+  return jobs.map(tagJobRoleFamily);
+}
+
+function classifyJob(job) {
+  const titleText = cleanWhitespace([job?.title, job?.category, job?.jobCategory].filter(Boolean).join(' '));
+  const searchText = cleanWhitespace(
     [
       searchTextFromSourceUrl(job?.sourceUrl),
       job?.search,
@@ -110,19 +213,42 @@ export function roleFamilyForJob(job) {
       .filter(Boolean)
       .join(' '),
   );
-}
+  const descriptionText = cleanWhitespace(job?.description || job?.listingText);
+  const descriptionArea = aiMlAreaForDescription(descriptionText);
+  const searchArea = singleAiMlAreaForText(searchText);
+  const isAiMlJob =
+    Boolean(descriptionArea) ||
+    isAiMlSearchContext(titleText) ||
+    isAiMlSearchContext(searchText);
 
-export function tagJobRoleFamily(job) {
-  const roleFamily = roleFamilyForJob(job);
+  if (isAiMlJob) {
+    return {
+      roleFamily: aiMlRoleCategoryForTitle(titleText),
+      aiMlArea: descriptionArea || searchArea || 'other_ai_ml',
+    };
+  }
+
+  const titleRoleFamily = roleFamilyForTitle(titleText);
+  const roleFamily = titleRoleFamily || roleFamilyForSearchContext(searchText);
   return {
-    ...job,
     roleFamily,
-    category: roleFamily,
+    aiMlArea: '',
   };
 }
 
-export function tagJobsWithRoleFamily(jobs) {
-  return jobs.map(tagJobRoleFamily);
+function aiMlRoleCategoryForTitle(title) {
+  const normalized = cleanWhitespace(title);
+  if (/\bdata scientist(?:s)?\b/i.test(normalized)) return 'data_scientist';
+  if (/\bapplied scientist(?:s)?\b/i.test(normalized)) return 'applied_scientist';
+  if (
+    /\b(?:research scientist|machine learning scientist|ml scientist|ai scientist|artificial intelligence scientist)s?\b/i.test(
+      normalized,
+    )
+  ) {
+    return 'research_scientist';
+  }
+  if (/\b(?:engineer|developer|architect)\b/i.test(normalized)) return 'ml_engineer';
+  return 'other_ai_ml';
 }
 
 function jobTextForLanguageFilter(job) {
@@ -163,7 +289,7 @@ function looksMostlyEnglish(text) {
 
 function roleFamilyForSearchContext(text) {
   const normalized = cleanWhitespace(text);
-  for (const family of ['ai_ml', 'data', 'software']) {
+  for (const family of ['data', 'software']) {
     if (SEARCH_CONTEXT_ROLE_FAMILY_PATTERNS[family].some((pattern) => pattern.test(normalized))) return family;
   }
   return 'software';
@@ -174,21 +300,69 @@ function roleFamilyForTitle(title) {
   if (!normalized) return '';
 
   const titleRoleFamilyPatterns = {
-    ai_ml: [
-      /\b(?:ai|artificial intelligence|machine learning|ml|deep learning|computer vision|nlp|llm|generative ai|prompt engineer|data scien(?:ce|tist)|applied scientist|research scientist)\b/i,
-    ],
     data: [
       /\b(?:data engineer|data engineering|analytics engineer|data analyst|business intelligence|bi engineer|etl|elt|data warehouse|data pipeline|database engineer|database administrator|dba)\b/i,
     ],
     software: [
-      /\b(?:software engineer|software developer|full[ -]?stack|backend|back[ -]?end|frontend|front[ -]?end|web developer|application developer|mobile developer|ios developer|android developer|qa engineer|quality assurance|test engineer|sdet|engineer|developer)\b/i,
+      /\b(?:software engineer|software developer|full[ -]?stack|backend|back[ -]?end|frontend|front[ -]?end|web developer|application developer|mobile developer|ios developer|android developer|qa engineer|quality assurance|test engineer|sdet)\b/i,
     ],
   };
 
-  for (const family of ['ai_ml', 'data', 'software']) {
+  for (const family of ['data', 'software']) {
     if (titleRoleFamilyPatterns[family].some((pattern) => pattern.test(normalized))) return family;
   }
   return '';
+}
+
+function aiMlAreasForText(text) {
+  const normalized = cleanWhitespace(text);
+  if (!normalized) return [];
+
+  return AI_ML_AREA_PATTERNS.filter(({ patterns }) =>
+    patterns.some((pattern) => pattern.test(normalized)),
+  ).map(({ category }) => category);
+}
+
+function aiMlAreaForText(text) {
+  const matches = aiMlAreasForText(text);
+  if (matches.includes('multimodal_ml')) return 'multimodal_ml';
+  return matches.length === 1 ? matches[0] : '';
+}
+
+function aiMlAreaForDescription(text) {
+  const normalized = cleanWhitespace(text);
+  if (!normalized) return '';
+
+  const scores = AI_ML_AREA_PATTERNS.map(({ category, patterns }) => ({
+    category,
+    score: patterns.reduce(
+      (total, pattern) => total + patternMatchCount(pattern, normalized),
+      0,
+    ),
+  })).filter(({ score }) => score > 0);
+  if (!scores.length) return '';
+
+  // "Multimodal" is itself a precise specialty even when the description also
+  // names its component modalities, such as vision, language, or speech.
+  if (scores.some(({ category }) => category === 'multimodal_ml')) return 'multimodal_ml';
+
+  const highestScore = Math.max(...scores.map(({ score }) => score));
+  const winners = scores.filter(({ score }) => score === highestScore);
+  return winners.length === 1 ? winners[0].category : '';
+}
+
+function patternMatchCount(pattern, text) {
+  const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
+  return [...text.matchAll(new RegExp(pattern.source, flags))].length;
+}
+
+function singleAiMlAreaForText(text) {
+  return aiMlAreaForText(text);
+}
+
+function isAiMlSearchContext(text) {
+  const normalized = cleanWhitespace(text);
+  return AI_ML_ROLE_PATTERN.test(normalized) || aiMlAreasForText(normalized).length > 0;
 }
 
 function searchTextFromSourceUrl(value) {

@@ -144,3 +144,28 @@ docker ps
 ```
 
 Scraped jobs are inserted into PostgreSQL table `scraped_jobs`. Duplicate detection is handled by PostgreSQL using the scraper's duplicate key logic, without deleting existing rows during normal runs.
+
+The `category` column identifies the role type. It uses `software` and `data` for
+those role families, and distinguishes these AI/ML roles:
+
+- `ml_engineer`
+- `data_scientist`
+- `applied_scientist`
+- `research_scientist`
+- `other_ai_ml` when the role type is unclear
+
+The separate `ai_ml_area` column identifies what an AI/ML role works on. It is
+classified primarily from the full job description rather than the title:
+
+- `computer_vision`
+- `nlp`
+- `speech_audio_ml`
+- `recommendation_systems`
+- `time_series_forecasting`
+- `anomaly_fraud_detection`
+- `graph_ml`
+- `robotics_control`
+- `generative_ai`
+- `multimodal_ml`
+- `tabular_ml`
+- `other_ai_ml` when the description does not provide enough evidence for a specialty

@@ -4,7 +4,11 @@ import fs from 'node:fs/promises';
 import { chromium } from 'playwright';
 import pg from 'pg';
 import { saveJobsToPostgres } from '../lib/postgres.js';
-import { isExcludedEngineeringRole, isEnglishOnlyJob } from '../lib/jobFilters.js';
+import {
+  AI_ML_JOB_SEARCHES,
+  isExcludedEngineeringRole,
+  isEnglishOnlyJob,
+} from '../lib/jobFilters.js';
 import { isWithinLast24Hours } from '../lib/recency.js';
 
 const LINKEDIN_BASE_URL = 'https://www.linkedin.com';
@@ -14,7 +18,7 @@ const DEFAULT_LINKEDIN_SEARCHES = [
   'full stack engineer',
   'backend engineer',
   'frontend engineer',
-  'data scientist',
+  ...AI_ML_JOB_SEARCHES,
 ];
 const DISALLOWED_WORKPLACE_PATTERN =
   /\b(?:hybrid|on[\s-]?site|in[\s-]?office|office[\s-]?based|work\s+from\s+(?:the\s+)?office)\b/i;

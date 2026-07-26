@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { saveJobsToPostgres } from '../lib/postgres.js';
 import { filterJobsPostedWithinLast24Hours } from '../lib/recency.js';
-import { filterExcludedEngineeringRoles } from '../lib/jobFilters.js';
+import { AI_ML_JOB_SEARCHES, filterExcludedEngineeringRoles } from '../lib/jobFilters.js';
 import { enrichJobDescriptions } from '../lib/descriptions.js';
 
 const DIVERSITYJOBS_BASE_URL = 'https://diversityjobs.com';
@@ -14,17 +14,13 @@ const DEFAULT_DIVERSITYJOBS_QUERIES = [
   'software engineer',
   'data engineer',
   'software developer',
-  'machine learning engineer',
-  'ml engineer',
-  'ai engineer',
-  'artificial intelligence engineer',
   'full stack developer',
   'full stack engineer',
   'backend developer',
   'backend engineer',
   'frontend developer',
   'frontend engineer',
-  'data scientist',
+  ...AI_ML_JOB_SEARCHES,
 ];
 const DEFAULT_LOCATION = 'Remote';
 

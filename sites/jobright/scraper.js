@@ -3,19 +3,20 @@ import axios from 'axios';
 import fs from 'node:fs/promises';
 import { chromium } from 'playwright';
 import { saveJobsToPostgres } from '../lib/postgres.js';
-import { filterExcludedEngineeringRoles, isEnglishOnlyJob } from '../lib/jobFilters.js';
+import {
+  AI_ML_JOB_SEARCHES,
+  filterExcludedEngineeringRoles,
+  isEnglishOnlyJob,
+} from '../lib/jobFilters.js';
 
 const BASE_URL = 'https://jobright.ai';
 const DEFAULT_JOBRIGHT_SEARCHES = [
   'software engineer',
   'data engineer',
-  'machine learning engineer',
-  'ai engineer',
-  'artificial intelligence engineer',
   'full stack engineer',
   'backend engineer',
   'frontend engineer',
-  'data scientist',
+  ...AI_ML_JOB_SEARCHES,
 ];
 const JOBRIGHT_COUNTRIES = {
   us: {
