@@ -9,6 +9,8 @@ import { enrichJobDescriptions } from '../lib/descriptions.js';
 
 const BUILTIN_BASE_URL = 'https://builtin.com';
 const DEFAULT_BUILTIN_URLS = [
+  'https://builtin.com/jobs/remote/engineering/software-engineering?daysSinceUpdated=1&city=&state=&country=USA&allLocations=true',
+  'https://builtin.com/jobs/remote/data-analytics/data-engineering?daysSinceUpdated=1&country=USA&allLocations=true',
   'https://builtin.com/jobs/remote/ai-machine-learning/ai-engineering/machine-learning-engineering/data-science/generative-artificial-intelligence/computer-vision-ai/nlp/deep-learning?daysSinceUpdated=1&country=USA&allLocations=true',
 ];
 
@@ -404,10 +406,7 @@ async function runScraper(args) {
   const jobs = await scrapeBuiltinJobs(args);
 
   console.log(`Found ${jobs.length} Built In jobs posted within the last 24 hours.`);
-  const { insertedOrUpdated, skippedNonAiMl = 0, savedUrls = [] } = await saveJobsToPostgres(jobs);
-  if (skippedNonAiMl) {
-    console.log(`Rejected ${skippedNonAiMl} non-AI/ML Built In job(s).`);
-  }
+  const { insertedOrUpdated, savedUrls = [] } = await saveJobsToPostgres(jobs);
   console.log(`Saved ${insertedOrUpdated} Built In jobs to PostgreSQL.`);
 
   const savedUrlSet = new Set(savedUrls);

@@ -95,6 +95,40 @@ test('does not treat an AI/ML search URL as evidence that an unrelated result is
   assert.equal(roleFamilyForJob(job), 'software');
 });
 
+test('keeps an explicit Data Engineer title in the data family despite AI/ML description text', () => {
+  const job = {
+    title: 'Data Engineer',
+    description:
+      'Build data pipelines for machine learning models and collaborate with the AI research team.',
+  };
+
+  assert.equal(isAiMlJob(job), false);
+  assert.equal(roleFamilyForJob(job), 'data');
+  assert.equal(aiMlAreaForJob(job), '');
+});
+
+test('keeps an explicit software title in the software family despite AI/ML description text', () => {
+  const job = {
+    title: 'Backend Software Engineer',
+    description: 'Develop APIs that serve machine learning predictions to customers.',
+  };
+
+  assert.equal(isAiMlJob(job), false);
+  assert.equal(roleFamilyForJob(job), 'software');
+  assert.equal(aiMlAreaForJob(job), '');
+});
+
+test('allows explicit AI/ML title evidence to override a conventional role family', () => {
+  const job = {
+    title: 'Machine Learning Data Engineer',
+    description: 'Train and deploy recommendation models.',
+  };
+
+  assert.equal(isAiMlJob(job), true);
+  assert.equal(roleFamilyForJob(job), 'ml_engineer');
+  assert.equal(aiMlAreaForJob(job), 'recommendation_systems');
+});
+
 test('filters scraped results to jobs with AI/ML evidence in the job itself', () => {
   const jobs = [
     {
@@ -105,7 +139,8 @@ test('filters scraped results to jobs with AI/ML evidence in the job itself', ()
     {
       title: 'Data Engineer',
       jobCategory: 'Artificial Intelligence',
-      description: 'Build ETL pipelines and maintain the company data warehouse.',
+      description:
+        'Build ETL pipelines for machine learning models and maintain the company data warehouse.',
       sourceUrl: 'https://example.com/jobs?q=artificial+intelligence',
     },
     {

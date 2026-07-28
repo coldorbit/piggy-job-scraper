@@ -8,7 +8,14 @@ import { AI_ML_JOB_SEARCHES, filterExcludedEngineeringRoles } from '../lib/jobFi
 import { cleanHtmlText } from '../lib/descriptions.js';
 
 const REMOTEHUNTER_BASE_URL = 'https://www.remotehunter.com';
-const DEFAULT_REMOTEHUNTER_SEARCHES = [...AI_ML_JOB_SEARCHES];
+const DEFAULT_REMOTEHUNTER_SEARCHES = [
+  'Software Engineer',
+  'Data Engineer',
+  'Full Stack Engineer',
+  'Backend Engineer',
+  'Frontend Engineer',
+  ...AI_ML_JOB_SEARCHES,
+];
 
 const DEFAULT_ARGS = {
   searches: envList(process.env.REMOTEHUNTER_SEARCHES || process.env.REMOTEHUNTER_SEARCH),
@@ -444,10 +451,7 @@ async function runScraper(args) {
   const jobs = await scrapeRemoteHunter(args);
 
   console.log(`Found ${jobs.length} RemoteHunter jobs posted within the last 24 hours.`);
-  const { insertedOrUpdated, skippedNonAiMl = 0, savedUrls = [] } = await saveJobsToPostgres(jobs);
-  if (skippedNonAiMl) {
-    console.log(`Rejected ${skippedNonAiMl} non-AI/ML RemoteHunter job(s).`);
-  }
+  const { insertedOrUpdated, savedUrls = [] } = await saveJobsToPostgres(jobs);
   console.log(`Saved ${insertedOrUpdated} RemoteHunter jobs to PostgreSQL.`);
 
   const savedUrlSet = new Set(savedUrls);

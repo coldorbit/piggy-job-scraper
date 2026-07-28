@@ -378,6 +378,7 @@ function hasAiMlEvidence(titleText, descriptionText) {
   const normalizedDescription = cleanWhitespace(descriptionText);
 
   if (AI_ML_TITLE_PATTERN.test(normalizedTitle)) return true;
+  if (roleFamilyForTitle(normalizedTitle)) return false;
   if (hasExplicitAiMlResponsibility(normalizedDescription)) return true;
 
   return descriptionSegments(normalizedDescription).some(

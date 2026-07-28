@@ -1,12 +1,14 @@
 import 'dotenv/config';
 import { QueryTypes, Sequelize } from 'sequelize';
-import { isAiMlJob, tagJobRoleFamily } from '../lib/jobFilters.js';
+import { tagJobRoleFamily } from '../lib/jobFilters.js';
 
 const DEFAULT_HOURS = 48;
 const MAX_HOURS = 24 * 31;
 
 function parseArgs(argv) {
   let hours = DEFAULT_HOURS;
+  let restoreHiddenFrom = '';
+  let restoreHiddenTo = '';
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -20,10 +22,31 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
+    if (token === '--restore-hidden-from' || token === '--restore-hidden-to') {
+      const value = argv[index + 1];
+      const date = new Date(value);
+      if (!value || Number.isNaN(date.getTime())) {
+        throw new Error(`${token} must be a valid ISO date`);
+      }
+      if (token === '--restore-hidden-from') restoreHiddenFrom = date.toISOString();
+      if (token === '--restore-hidden-to') restoreHiddenTo = date.toISOString();
+      index += 1;
+      continue;
+    }
     throw new Error(`Unknown option: ${token}`);
   }
 
-  return { hours };
+  if (Boolean(restoreHiddenFrom) !== Boolean(restoreHiddenTo)) {
+    throw new Error('--restore-hidden-from and --restore-hidden-to must be used together');
+  }
+  if (
+    restoreHiddenFrom &&
+    new Date(restoreHiddenFrom).getTime() >= new Date(restoreHiddenTo).getTime()
+  ) {
+    throw new Error('--restore-hidden-from must be earlier than --restore-hidden-to');
+  }
+
+  return { hours, restoreHiddenFrom, restoreHiddenTo };
 }
 
 function createDatabaseConnection() {
@@ -59,7 +82,17 @@ function jobFromRow(row) {
   };
 }
 
-async function updateRecentJobs(database, hours) {
+function hiddenByMaintenanceRun(row, restoreHiddenFrom, restoreHiddenTo) {
+  if (!row.is_hidden || !row.hidden_at || !restoreHiddenFrom || !restoreHiddenTo) return false;
+  const hiddenAt = new Date(row.hidden_at).getTime();
+  return (
+    hiddenAt >= new Date(restoreHiddenFrom).getTime() &&
+    hiddenAt <= new Date(restoreHiddenTo).getTime()
+  );
+}
+
+async function updateRecentJobs(database, options) {
+  const { hours, restoreHiddenFrom, restoreHiddenTo } = options;
   return database.transaction(async (transaction) => {
     const rows = await database.query(
       `
@@ -70,7 +103,8 @@ async function updateRecentJobs(database, hours) {
           ai_ml_area,
           listing_text,
           raw_job,
-          is_hidden
+          is_hidden,
+          hidden_at
         FROM scraped_jobs
         WHERE scraped_at >= NOW() - make_interval(hours => :hours)
         ORDER BY id
@@ -86,62 +120,48 @@ async function updateRecentJobs(database, hours) {
     const summary = {
       hours,
       reviewed: rows.length,
-      aiMlUpdated: 0,
-      nonAiMlHidden: 0,
-      nonAiMlAlreadyHidden: 0,
+      rolesUpdated: 0,
+      hiddenRestored: 0,
+      categories: {},
     };
 
     for (const row of rows) {
       const job = jobFromRow(row);
-
-      if (isAiMlJob(job)) {
-        const taggedJob = tagJobRoleFamily(job);
-        await database.query(
-          `
-            UPDATE scraped_jobs
-            SET
-              category = :category,
-              ai_ml_area = :aiMlArea,
-              raw_job = CAST(:rawJob AS JSONB),
-              updated_at = NOW()
-            WHERE id = :id
-          `,
-          {
-            replacements: {
-              id: row.id,
-              category: taggedJob.roleFamily,
-              aiMlArea: taggedJob.aiMlArea,
-              rawJob: JSON.stringify(taggedJob),
-            },
-            transaction,
-            type: QueryTypes.UPDATE,
-          },
-        );
-        summary.aiMlUpdated += 1;
-        continue;
-      }
-
-      if (row.is_hidden) {
-        summary.nonAiMlAlreadyHidden += 1;
-        continue;
-      }
+      const taggedJob = tagJobRoleFamily(job);
+      const restoreHidden = hiddenByMaintenanceRun(
+        row,
+        restoreHiddenFrom,
+        restoreHiddenTo,
+      );
 
       await database.query(
         `
           UPDATE scraped_jobs
           SET
-            is_hidden = TRUE,
-            hidden_at = COALESCE(hidden_at, NOW()),
+            category = :category,
+            ai_ml_area = :aiMlArea,
+            raw_job = CAST(:rawJob AS JSONB),
+            is_hidden = CASE WHEN :restoreHidden THEN FALSE ELSE is_hidden END,
+            hidden_at = CASE WHEN :restoreHidden THEN NULL ELSE hidden_at END,
             updated_at = NOW()
           WHERE id = :id
         `,
         {
-          replacements: { id: row.id },
+          replacements: {
+            id: row.id,
+            category: taggedJob.roleFamily,
+            aiMlArea: taggedJob.aiMlArea,
+            rawJob: JSON.stringify(taggedJob),
+            restoreHidden,
+          },
           transaction,
           type: QueryTypes.UPDATE,
         },
       );
-      summary.nonAiMlHidden += 1;
+      summary.rolesUpdated += 1;
+      summary.categories[taggedJob.roleFamily] =
+        (summary.categories[taggedJob.roleFamily] || 0) + 1;
+      if (restoreHidden) summary.hiddenRestored += 1;
     }
 
     return summary;
@@ -149,11 +169,11 @@ async function updateRecentJobs(database, hours) {
 }
 
 async function main() {
-  const { hours } = parseArgs(process.argv.slice(2));
+  const options = parseArgs(process.argv.slice(2));
   const database = createDatabaseConnection();
 
   try {
-    const summary = await updateRecentJobs(database, hours);
+    const summary = await updateRecentJobs(database, options);
     console.log(`Recent scraped-job update complete: ${JSON.stringify(summary)}`);
   } finally {
     await database.close();

@@ -143,14 +143,17 @@ docker compose version
 docker ps
 ```
 
-Only jobs with AI/ML evidence in their title or description are inserted into
-PostgreSQL table `scraped_jobs`. Search queries and source URLs help discover jobs
-and may provide an AI/ML specialty fallback, but they do not make an unrelated
-search result eligible. Duplicate detection is handled by PostgreSQL using the
-scraper's duplicate key logic, without deleting existing rows during normal runs.
+Scraped jobs are inserted into PostgreSQL table `scraped_jobs`. Search queries and
+source URLs help discover jobs and may provide an AI/ML specialty fallback, but
+they do not make an unrelated search result an AI/ML role. Duplicate detection is
+handled by PostgreSQL using the scraper's duplicate key logic, without deleting
+existing rows during normal runs.
 
-The `category` column identifies the AI/ML role type:
+The `category` column identifies the role type. Explicit data and software titles
+remain in those role families even when their descriptions mention AI/ML:
 
+- `software`
+- `data`
 - `ml_engineer`
 - `data_scientist`
 - `applied_scientist`
@@ -173,8 +176,7 @@ classified primarily from the full job description rather than the title:
 - `tabular_ml`
 - `other_ai_ml` when the description does not provide enough evidence for a specialty
 
-To reapply the current AI/ML rules to recently scraped rows, reclassifying eligible
-jobs and soft-hiding non-AI/ML jobs:
+To reapply the current role and AI/ML specialty rules to recently scraped rows:
 
 ```bash
 pnpm jobs:reclassify-recent -- --hours 48

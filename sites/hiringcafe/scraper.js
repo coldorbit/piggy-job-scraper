@@ -10,7 +10,14 @@ import { cleanHtmlText, enrichJobDescriptions } from '../lib/descriptions.js';
 
 const HIRINGCAFE_BASE_URL = 'https://hiring.cafe';
 const execFileAsync = promisify(execFile);
-const DEFAULT_HIRINGCAFE_SEARCHES = [...AI_ML_JOB_SEARCHES];
+const DEFAULT_HIRINGCAFE_SEARCHES = [
+  'software engineer',
+  'data engineer',
+  'full stack engineer',
+  'backend engineer',
+  'frontend engineer',
+  ...AI_ML_JOB_SEARCHES,
+];
 const DEFAULT_DEPARTMENTS = [
   'Engineering',
   'Software Development',
@@ -561,10 +568,7 @@ async function runScraper(args) {
   const jobs = await scrapeHiringCafe(args);
 
   console.log(`Found ${jobs.length} HiringCafe jobs posted within the last 24 hours.`);
-  const { insertedOrUpdated, skippedNonAiMl = 0, savedUrls = [] } = await saveJobsToPostgres(jobs);
-  if (skippedNonAiMl) {
-    console.log(`Rejected ${skippedNonAiMl} non-AI/ML HiringCafe job(s).`);
-  }
+  const { insertedOrUpdated, savedUrls = [] } = await saveJobsToPostgres(jobs);
   console.log(`Saved ${insertedOrUpdated} HiringCafe jobs to PostgreSQL.`);
 
   const savedUrlSet = new Set(savedUrls);
