@@ -1,6 +1,11 @@
 import crypto from 'node:crypto';
 import { DataTypes, Op, Sequelize } from 'sequelize';
-import { filterEnglishOnlyJobs, isEnglishOnlyJob, tagJobRoleFamily } from './jobFilters.js';
+import {
+  filterAiMlJobs,
+  filterEnglishOnlyJobs,
+  isEnglishOnlyJob,
+  tagJobRoleFamily,
+} from './jobFilters.js';
 
 let sequelize;
 let ScrapedJob;
@@ -149,12 +154,20 @@ export async function saveJobsToPostgres(jobs) {
   try {
     await ensureJobsTable();
 
-    const languageFilteredJobs = filterEnglishOnlyJobs(jobs.filter((job) => job?.url));
+    const jobsWithUrls = jobs.filter((job) => job?.url);
+    const aiMlJobs = filterAiMlJobs(jobsWithUrls);
+    const skippedNonAiMl = jobsWithUrls.length - aiMlJobs.length;
+    const languageFilteredJobs = filterEnglishOnlyJobs(aiMlJobs);
     const rows = dedupeRows(languageFilteredJobs.map(jobToRow));
-    if (!rows.length) return { insertedOrUpdated: 0 };
+    if (!rows.length) return { insertedOrUpdated: 0, skippedNonAiMl, savedUrls: [] };
     const filteredRows = await filterExistingRows(rows);
     if (!filteredRows.length) {
-      return { insertedOrUpdated: 0, skippedDuplicates: rows.length, savedUrls: [] };
+      return {
+        insertedOrUpdated: 0,
+        skippedDuplicates: rows.length,
+        skippedNonAiMl,
+        savedUrls: [],
+      };
     }
 
     await getScrapedJobModel().bulkCreate(filteredRows, {
@@ -164,6 +177,7 @@ export async function saveJobsToPostgres(jobs) {
     return {
       insertedOrUpdated: filteredRows.length,
       skippedDuplicates: rows.length - filteredRows.length,
+      skippedNonAiMl,
       savedUrls: filteredRows.map((row) => row.url),
     };
   } finally {

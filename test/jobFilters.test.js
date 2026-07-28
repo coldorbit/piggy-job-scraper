@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
   AI_ML_JOB_SEARCHES,
   aiMlAreaForJob,
+  filterAiMlJobs,
+  isAiMlJob,
   roleFamilyForJob,
   tagJobRoleFamily,
 } from '../sites/lib/jobFilters.js';
@@ -72,13 +74,54 @@ test('uses repeated description evidence to resolve the dominant area', () => {
   );
 });
 
-test('uses a single specialty search only as an area fallback', () => {
+test('uses a single specialty search only as an area fallback for a qualifying AI/ML job', () => {
   const job = {
-    title: 'Software Engineer',
+    title: 'Machine Learning Engineer',
     sourceUrl: 'https://example.com/jobs?q=recommendation+systems',
   };
   assert.equal(aiMlAreaForJob(job), 'recommendation_systems');
   assert.equal(roleFamilyForJob(job), 'ml_engineer');
+});
+
+test('does not treat an AI/ML search URL as evidence that an unrelated result is AI/ML', () => {
+  const job = {
+    title: 'Backend Software Engineer',
+    description: 'Build REST APIs and payment services with Node.js and PostgreSQL.',
+    sourceUrl: 'https://example.com/jobs?q=machine+learning+engineer',
+  };
+
+  assert.equal(isAiMlJob(job), false);
+  assert.equal(aiMlAreaForJob(job), '');
+  assert.equal(roleFamilyForJob(job), 'software');
+});
+
+test('filters scraped results to jobs with AI/ML evidence in the job itself', () => {
+  const jobs = [
+    {
+      title: 'Research Engineer',
+      description: 'Develop anomaly detection and outlier detection models for transactions.',
+    },
+    { title: 'Computer Vision Engineer' },
+    {
+      title: 'Data Engineer',
+      jobCategory: 'Artificial Intelligence',
+      description: 'Build ETL pipelines and maintain the company data warehouse.',
+      sourceUrl: 'https://example.com/jobs?q=artificial+intelligence',
+    },
+    {
+      title: 'Software Engineer',
+      description: 'Our company uses AI. Build billing APIs and internal admin tools.',
+    },
+    {
+      title: 'Software Engineer',
+      description: 'Collaborate with the computer vision team. Model billing data in PostgreSQL.',
+    },
+  ];
+
+  assert.deepEqual(
+    filterAiMlJobs(jobs).map((job) => job.title),
+    ['Research Engineer', 'Computer Vision Engineer'],
+  );
 });
 
 test('does not classify an AI/ML area from the title alone', () => {

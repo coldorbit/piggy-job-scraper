@@ -10,14 +10,7 @@ import {
 } from '../lib/jobFilters.js';
 
 const BASE_URL = 'https://jobright.ai';
-const DEFAULT_JOBRIGHT_SEARCHES = [
-  'software engineer',
-  'data engineer',
-  'full stack engineer',
-  'backend engineer',
-  'frontend engineer',
-  ...AI_ML_JOB_SEARCHES,
-];
+const DEFAULT_JOBRIGHT_SEARCHES = [...AI_ML_JOB_SEARCHES];
 const JOBRIGHT_COUNTRIES = {
   us: {
     label: 'United States',
@@ -954,7 +947,10 @@ async function runScraper(args) {
     await browser.close();
   }
 
-  const { insertedOrUpdated, savedUrls = [] } = await saveJobsToPostgres(jobs);
+  const { insertedOrUpdated, skippedNonAiMl = 0, savedUrls = [] } = await saveJobsToPostgres(jobs);
+  if (skippedNonAiMl) {
+    console.log(`Rejected ${skippedNonAiMl} non-AI/ML Jobright job(s).`);
+  }
   console.log(`Saved ${insertedOrUpdated} Jobright jobs to PostgreSQL.`);
 
   const savedUrlSet = new Set(savedUrls);

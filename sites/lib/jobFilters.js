@@ -142,8 +142,14 @@ const AI_ML_AREA_PATTERNS = [
   },
 ];
 
-const AI_ML_ROLE_PATTERN =
-  /\b(?:ai|artificial intelligence|machine learning|ml|deep learning|data scien(?:ce|tist)|applied scientist|research scientist)\b/i;
+const AI_ML_TITLE_PATTERN =
+  /\b(?:ai|artificial intelligence|machine learning|ml|deep learning|data scientist|applied scientist|computer vision|machine vision|natural language processing|nlp|large language models?|llms?|generative ai|multi[- ]?modal|graph neural networks?|gnns?|reinforcement learning)\b/i;
+const AI_ML_DESCRIPTION_PATTERN =
+  /\b(?:ai|artificial intelligence|machine learning|ml|deep learning|data science|neural networks?|computer vision|machine vision|natural language processing|nlp|large language models?|llms?|foundation models?|generative ai|multi[- ]?modal|graph neural networks?|gnns?|reinforcement learning|gradient boost(?:ing|ed)?|xgboost|lightgbm|catboost)\b/i;
+const AI_ML_WORK_PATTERN =
+  /\b(?:build|building|built|create|creating|develop|developing|design|designing|deploy|deploying|implement|implementing|improve|improving|optimize|optimizing|own|owning|research|researching|train|training|trained|productioniz(?:e|ing)|model|models|modeling|modelling|inference|prediction|predictive)\b/i;
+const AI_ML_MODELING_PATTERN =
+  /\b(?:model|models|modeling|modelling|train|training|trained|inference|prediction|predictive|neural networks?|learning algorithms?)\b/i;
 
 const SEARCH_CONTEXT_ROLE_FAMILY_PATTERNS = {
   data: [
@@ -180,6 +186,16 @@ export function filterEnglishOnlyJobs(jobs) {
   return jobs.filter(isEnglishOnlyJob);
 }
 
+export function isAiMlJob(job) {
+  const titleText = cleanWhitespace(job?.title);
+  const descriptionText = cleanWhitespace([job?.description, job?.listingText].filter(Boolean).join(' '));
+  return hasAiMlEvidence(titleText, descriptionText);
+}
+
+export function filterAiMlJobs(jobs) {
+  return jobs.filter(isAiMlJob);
+}
+
 export function roleFamilyForJob(job) {
   return classifyJob(job).roleFamily;
 }
@@ -203,7 +219,7 @@ export function tagJobsWithRoleFamily(jobs) {
 }
 
 function classifyJob(job) {
-  const titleText = cleanWhitespace([job?.title, job?.category, job?.jobCategory].filter(Boolean).join(' '));
+  const titleText = cleanWhitespace(job?.title);
   const searchText = cleanWhitespace(
     [
       searchTextFromSourceUrl(job?.sourceUrl),
@@ -216,12 +232,9 @@ function classifyJob(job) {
   const descriptionText = cleanWhitespace(job?.description || job?.listingText);
   const descriptionArea = aiMlAreaForDescription(descriptionText);
   const searchArea = singleAiMlAreaForText(searchText);
-  const isAiMlJob =
-    Boolean(descriptionArea) ||
-    isAiMlSearchContext(titleText) ||
-    isAiMlSearchContext(searchText);
+  const isAiMl = hasAiMlEvidence(titleText, descriptionText);
 
-  if (isAiMlJob) {
+  if (isAiMl) {
     return {
       roleFamily: aiMlRoleCategoryForTitle(titleText),
       aiMlArea: descriptionArea || searchArea || 'other_ai_ml',
@@ -360,9 +373,31 @@ function singleAiMlAreaForText(text) {
   return aiMlAreaForText(text);
 }
 
-function isAiMlSearchContext(text) {
-  const normalized = cleanWhitespace(text);
-  return AI_ML_ROLE_PATTERN.test(normalized) || aiMlAreasForText(normalized).length > 0;
+function hasAiMlEvidence(titleText, descriptionText) {
+  const normalizedTitle = cleanWhitespace(titleText);
+  const normalizedDescription = cleanWhitespace(descriptionText);
+
+  if (AI_ML_TITLE_PATTERN.test(normalizedTitle)) return true;
+  if (hasExplicitAiMlResponsibility(normalizedDescription)) return true;
+
+  return descriptionSegments(normalizedDescription).some(
+    (segment) =>
+      aiMlAreasForText(segment).length > 0 &&
+      AI_ML_MODELING_PATTERN.test(segment),
+  );
+}
+
+function hasExplicitAiMlResponsibility(text) {
+  return descriptionSegments(text)
+    .some(
+      (segment) =>
+        AI_ML_DESCRIPTION_PATTERN.test(segment) &&
+        AI_ML_WORK_PATTERN.test(segment),
+    );
+}
+
+function descriptionSegments(text) {
+  return String(text || '').split(/(?:[.!?;]|\r?\n)+/);
 }
 
 function searchTextFromSourceUrl(value) {
