@@ -172,3 +172,10 @@ classified primarily from the full job description rather than the title:
 - `multimodal_ml`
 - `tabular_ml`
 - `other_ai_ml` when the description does not provide enough evidence for a specialty
+
+To reapply the current AI/ML rules to recently scraped rows, reclassifying eligible
+jobs and soft-hiding non-AI/ML jobs:
+
+```bash
+pnpm jobs:reclassify-recent -- --hours 48
+```
