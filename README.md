@@ -181,3 +181,21 @@ To reapply the current role and AI/ML specialty rules to recently scraped rows:
 ```bash
 pnpm jobs:reclassify-recent -- --hours 48
 ```
+
+Every stored job also receives normalized `seniority` and `work_mode` values.
+Seniority uses `intern`, `entry_level`, `junior`, `mid_level`, `senior`, `lead`,
+`staff`, `principal`, `manager`, `director`, `executive`, or `unknown`. Work mode
+uses `remote`, `hybrid`, `onsite`, or `unknown`.
+
+After deploying the schema/attribute changes, backfill existing rows before
+recalculating job-profile scores in `piggy-web`:
+
+```bash
+pnpm jobs:backfill-attributes
+cd ../piggy-web/api
+pnpm ranking:recalculate
+```
+
+Use `--dry-run` on either command to review counts without updating rows. Pass
+`--force` to `jobs:backfill-attributes` when classification rules change and all
+jobs must be reevaluated.

@@ -5,6 +5,7 @@ import {
   isEnglishOnlyJob,
   tagJobRoleFamily,
 } from './jobFilters.js';
+import { classifyJobAttributes } from './jobAttributes.js';
 
 let sequelize;
 let ScrapedJob;
@@ -23,15 +24,17 @@ function getSequelize() {
     sequelize = new Sequelize(databaseUrl(), {
       dialect: 'postgres',
       logging: false,
-      dialectOptions:
-        process.env.DATABASE_SSL === 'true'
+      dialectOptions: {
+        connectionTimeoutMillis: Number(process.env.DATABASE_CONNECT_TIMEOUT_MS) || 10_000,
+        ...(process.env.DATABASE_SSL === 'true'
           ? {
               ssl: {
                 require: true,
                 rejectUnauthorized: false,
               },
             }
-          : {},
+          : {}),
+      },
     });
   }
 
@@ -73,6 +76,11 @@ function getScrapedJobModel() {
       aiMlArea: {
         type: DataTypes.TEXT,
         field: 'ai_ml_area',
+      },
+      seniority: DataTypes.TEXT,
+      workMode: {
+        type: DataTypes.TEXT,
+        field: 'work_mode',
       },
       postedAt: {
         type: DataTypes.DATE,
@@ -144,6 +152,7 @@ export async function ensureJobsTable() {
   await getScrapedJobModel().sync();
   await ensureDuplicateKeyColumn();
   await ensureAiMlAreaColumn();
+  await ensureJobAttributeColumns();
   await ensureHiddenJobColumns();
   await runOptionalExistingRowCleanup();
   initialized = true;
@@ -190,21 +199,28 @@ export async function closePostgresConnection() {
 
 function jobToRow(job) {
   const taggedJob = tagJobRoleFamily(job);
-  const isHidden = Boolean(taggedJob.isHidden);
-  return {
-    url: taggedJob.url,
-    duplicateKey: duplicateKeyForJob(taggedJob),
-    source: taggedJob.source || 'Unknown',
-    sourceUrl: taggedJob.sourceUrl || null,
-    title: taggedJob.title || null,
-    company: taggedJob.company || null,
-    location: taggedJob.location || null,
-    category: taggedJob.roleFamily,
-    aiMlArea: taggedJob.aiMlArea,
-    postedAt: toDate(taggedJob.postedAt),
-    scrapedAt: toDate(taggedJob.scrapedAt) || new Date(),
-    listingText: taggedJob.listingText || taggedJob.description || null,
+  const attributes = classifyJobAttributes({
+    ...taggedJob,
     rawJob: taggedJob,
+  });
+  const attributedJob = { ...taggedJob, ...attributes };
+  const isHidden = Boolean(attributedJob.isHidden);
+  return {
+    url: attributedJob.url,
+    duplicateKey: duplicateKeyForJob(attributedJob),
+    source: attributedJob.source || 'Unknown',
+    sourceUrl: attributedJob.sourceUrl || null,
+    title: attributedJob.title || null,
+    company: attributedJob.company || null,
+    location: attributedJob.location || null,
+    category: attributedJob.roleFamily,
+    aiMlArea: attributedJob.aiMlArea,
+    seniority: attributedJob.seniority,
+    workMode: attributedJob.workMode,
+    postedAt: toDate(attributedJob.postedAt),
+    scrapedAt: toDate(attributedJob.scrapedAt) || new Date(),
+    listingText: attributedJob.listingText || attributedJob.description || null,
+    rawJob: attributedJob,
     isHidden,
     hiddenAt: isHidden ? new Date() : null,
     updatedAt: new Date(),
@@ -224,6 +240,74 @@ async function ensureDuplicateKeyColumn() {
   }
 }
 
+export async function backfillJobAttributes({ batchSize = 500, force = false, dryRun = false } = {}) {
+  await ensureJobsTable();
+  const ScrapedJob = getScrapedJobModel();
+  const summary = { reviewed: 0, changed: 0, unchanged: 0, seniority: {}, workMode: {}, dryRun };
+  let lastId = 0;
+  let rows;
+
+  do {
+    const missingAttribute = {
+      [Op.or]: [
+        { seniority: { [Op.is]: null } },
+        { seniority: 'unknown' },
+        { workMode: { [Op.is]: null } },
+        { workMode: 'unknown' },
+      ],
+    };
+    rows = await ScrapedJob.findAll({
+      attributes: ['id', 'title', 'location', 'listingText', 'rawJob', 'seniority', 'workMode'],
+      where: {
+        id: { [Op.gt]: lastId },
+        ...(force ? {} : missingAttribute),
+      },
+      order: [['id', 'ASC']],
+      limit: batchSize,
+    });
+    if (!rows.length) break;
+    lastId = rows.at(-1).id;
+
+    const updatesByAttributes = new Map();
+    for (const row of rows) {
+      const attributes = classifyJobAttributes({
+        ...(row.rawJob || {}),
+        title: row.title,
+        location: row.location,
+        listingText: row.listingText,
+        rawJob: row.rawJob,
+        seniority: !force && row.seniority !== 'unknown' ? row.seniority : undefined,
+        workMode: !force && row.workMode !== 'unknown' ? row.workMode : undefined,
+      });
+      summary.reviewed += 1;
+      summary.seniority[attributes.seniority] = (summary.seniority[attributes.seniority] || 0) + 1;
+      summary.workMode[attributes.workMode] = (summary.workMode[attributes.workMode] || 0) + 1;
+      if (attributes.seniority === row.seniority && attributes.workMode === row.workMode) {
+        summary.unchanged += 1;
+        continue;
+      }
+      summary.changed += 1;
+      const key = `${attributes.seniority}:${attributes.workMode}`;
+      const update = updatesByAttributes.get(key) || { ...attributes, ids: [] };
+      update.ids.push(row.id);
+      updatesByAttributes.set(key, update);
+    }
+
+    if (!dryRun) {
+      await getSequelize().transaction(async (transaction) => {
+        await Promise.all([...updatesByAttributes.values()].map((update) =>
+          ScrapedJob.update(
+            { seniority: update.seniority, workMode: update.workMode },
+            { where: { id: { [Op.in]: update.ids } }, transaction, silent: true },
+          ),
+        ));
+      });
+    }
+  } while (rows.length === batchSize);
+
+  return summary;
+}
+
 async function ensureAiMlAreaColumn() {
   const sequelize = getSequelize();
   const queryInterface = sequelize.getQueryInterface();
@@ -231,6 +315,25 @@ async function ensureAiMlAreaColumn() {
 
   if (!table.ai_ml_area) {
     await queryInterface.addColumn('scraped_jobs', 'ai_ml_area', {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    });
+  }
+}
+
+async function ensureJobAttributeColumns() {
+  const queryInterface = getSequelize().getQueryInterface();
+  const table = await queryInterface.describeTable('scraped_jobs');
+
+  if (!table.seniority) {
+    await queryInterface.addColumn('scraped_jobs', 'seniority', {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    });
+  }
+
+  if (!table.work_mode) {
+    await queryInterface.addColumn('scraped_jobs', 'work_mode', {
       type: DataTypes.TEXT,
       allowNull: true,
     });

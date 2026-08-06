@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { QueryTypes, Sequelize } from 'sequelize';
 import { tagJobRoleFamily } from '../lib/jobFilters.js';
+import { classifyJobAttributes } from '../lib/jobAttributes.js';
 
 const DEFAULT_HOURS = 48;
 const MAX_HOURS = 24 * 31;
@@ -78,6 +79,7 @@ function jobFromRow(row) {
   return {
     ...rawJob,
     title: row.title || rawJob.title || '',
+    location: row.location || rawJob.location || '',
     listingText: row.listing_text || rawJob.listingText || rawJob.description || '',
   };
 }
@@ -99,8 +101,11 @@ async function updateRecentJobs(database, options) {
         SELECT
           id,
           title,
+          location,
           category,
           ai_ml_area,
+          seniority,
+          work_mode,
           listing_text,
           raw_job,
           is_hidden,
@@ -128,6 +133,13 @@ async function updateRecentJobs(database, options) {
     for (const row of rows) {
       const job = jobFromRow(row);
       const taggedJob = tagJobRoleFamily(job);
+      const attributes = classifyJobAttributes({
+        ...taggedJob,
+        rawJob: taggedJob,
+        seniority: row.seniority,
+        workMode: row.work_mode,
+      });
+      const attributedJob = { ...taggedJob, ...attributes };
       const restoreHidden = hiddenByMaintenanceRun(
         row,
         restoreHiddenFrom,
@@ -140,6 +152,8 @@ async function updateRecentJobs(database, options) {
           SET
             category = :category,
             ai_ml_area = :aiMlArea,
+            seniority = :seniority,
+            work_mode = :workMode,
             raw_job = CAST(:rawJob AS JSONB),
             is_hidden = CASE WHEN :restoreHidden THEN FALSE ELSE is_hidden END,
             hidden_at = CASE WHEN :restoreHidden THEN NULL ELSE hidden_at END,
@@ -151,7 +165,9 @@ async function updateRecentJobs(database, options) {
             id: row.id,
             category: taggedJob.roleFamily,
             aiMlArea: taggedJob.aiMlArea,
-            rawJob: JSON.stringify(taggedJob),
+            seniority: attributedJob.seniority,
+            workMode: attributedJob.workMode,
+            rawJob: JSON.stringify(attributedJob),
             restoreHidden,
           },
           transaction,
