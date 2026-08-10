@@ -15,7 +15,7 @@ services:
       - --max-scrolls
       - ${JOBRIGHT_MAX_SCROLLS:-30}
     env_file:
-      - .env
+      - /opt/applypilot/env/scraper.env
     volumes:
       - ./.auth:/app/.auth:ro
     restart: unless-stopped
@@ -35,7 +35,7 @@ services:
       - --max-scrolls
       - ${JOBRIGHT_MAX_SCROLLS:-30}
     env_file:
-      - .env
+      - /opt/applypilot/env/scraper.env
     volumes:
       - ./.auth:/app/.auth:ro
     restart: unless-stopped
@@ -51,7 +51,7 @@ services:
       - --watch-interval-minutes
       - ${WATCH_INTERVAL_MINUTES:-5}
     env_file:
-      - .env
+      - /opt/applypilot/env/scraper.env
     restart: unless-stopped
     init: true
 
@@ -67,7 +67,7 @@ services:
       - --max-scrolls
       - ${REMOTEHUNTER_MAX_SCROLLS:-10}
     env_file:
-      - .env
+      - /opt/applypilot/env/scraper.env
     restart: unless-stopped
     init: true
 
@@ -81,7 +81,7 @@ services:
       - --watch-interval-minutes
       - ${WATCH_INTERVAL_MINUTES:-5}
     env_file:
-      - .env
+      - /opt/applypilot/env/scraper.env
     restart: unless-stopped
     init: true
 
@@ -98,7 +98,7 @@ services:
         && node sites/remotehunter/scraper.js --max-scrolls "${REMOTEHUNTER_MAX_SCROLLS:-10}"
         && node sites/hiringcafe/scraper.js
     env_file:
-      - .env
+      - /opt/applypilot/env/scraper.env
     volumes:
       - ./.auth:/app/.auth:ro
     profiles:

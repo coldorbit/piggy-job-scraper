@@ -1,4 +1,4 @@
-name: Build and Deploy
+name: Build and Deploy Scraper
 
 on:
   push:
@@ -7,11 +7,16 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: deploy-${{ github.ref }}
+  group: deploy-scraper-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
 
 env:
   REGISTRY: ghcr.io
+
   WATCH_SERVICES: >-
     jobright-watch
     jobright-ca-watch
@@ -22,9 +27,6 @@ env:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
 
     steps:
       - name: Checkout
@@ -33,7 +35,8 @@ jobs:
       - name: Resolve image name
         id: image
         shell: bash
-        run: echo "name=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "name=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -43,7 +46,7 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ github.token }}
 
       - name: Build and push image
         uses: docker/build-push-action@v6
@@ -54,49 +57,108 @@ jobs:
           tags: |
             ${{ steps.image.outputs.name }}:${{ github.sha }}
             ${{ steps.image.outputs.name }}:latest
-          cache-from: type=registry,ref=${{ steps.image.outputs.name }}:buildcache
-          cache-to: type=registry,ref=${{ steps.image.outputs.name }}:buildcache,mode=max
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Configure SSH
+      - name: Install SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.HOSTINGER_SSH_KEY }}
+
+      - name: Copy Compose file
         env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
-          EC2_SSH_PORT: ${{ secrets.EC2_SSH_PORT || '22' }}
+          HOST: ${{ vars.SCRAPER_HOST }}
+          USER: ${{ vars.SCRAPER_USER || 'deploy' }}
+          DEPLOY_PATH: ${{ vars.SCRAPER_DEPLOY_PATH || '/opt/applypilot/scraper' }}
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p ~/.ssh
-          printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/ec2_deploy_key
-          chmod 600 ~/.ssh/ec2_deploy_key
-          ssh-keyscan -p "$EC2_SSH_PORT" -H "$EC2_HOST" >> ~/.ssh/known_hosts
 
-      - name: Copy Compose file to EC2
-        env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_USER: ${{ secrets.EC2_USER }}
-          EC2_DEPLOY_PATH: ${{ secrets.EC2_DEPLOY_PATH }}
-          EC2_SSH_PORT: ${{ secrets.EC2_SSH_PORT || '22' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          ssh -i ~/.ssh/ec2_deploy_key -p "$EC2_SSH_PORT" "$EC2_USER@$EC2_HOST" "mkdir -p '$EC2_DEPLOY_PATH'"
-          scp -i ~/.ssh/ec2_deploy_key -P "$EC2_SSH_PORT" docker-compose.yml "$EC2_USER@$EC2_HOST:$EC2_DEPLOY_PATH/docker-compose.yml"
+          ssh \
+            -o StrictHostKeyChecking=accept-new \
+            "$USER@$HOST" \
+            "mkdir -p '$DEPLOY_PATH'"
 
-      - name: Deploy on EC2
+          scp \
+            -o StrictHostKeyChecking=accept-new \
+            docker-compose.yml \
+            "$USER@$HOST:$DEPLOY_PATH/docker-compose.yml"
+
+      - name: Deploy scraper
         env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_USER: ${{ secrets.EC2_USER }}
-          EC2_DEPLOY_PATH: ${{ secrets.EC2_DEPLOY_PATH }}
-          EC2_SSH_PORT: ${{ secrets.EC2_SSH_PORT || '22' }}
-          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME || github.actor }}
+          HOST: ${{ vars.SCRAPER_HOST }}
+          USER: ${{ vars.SCRAPER_USER || 'deploy' }}
+          DEPLOY_PATH: ${{ vars.SCRAPER_DEPLOY_PATH || '/opt/applypilot/scraper' }}
+
+          GHCR_USERNAME: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+
           SCRAPER_IMAGE: ${{ steps.image.outputs.name }}:${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
-          ssh -i ~/.ssh/ec2_deploy_key -p "$EC2_SSH_PORT" "$EC2_USER@$EC2_HOST" \
-            "cd '$EC2_DEPLOY_PATH' \
-              && echo '$GHCR_TOKEN' | docker login ghcr.io -u '$GHCR_USERNAME' --password-stdin \
-              && SCRAPER_IMAGE='$SCRAPER_IMAGE' docker compose pull $WATCH_SERVICES \
-              && SCRAPER_IMAGE='$SCRAPER_IMAGE' docker compose up -d --remove-orphans $WATCH_SERVICES \
-              && docker image prune -f"
+
+          ssh \
+            -o StrictHostKeyChecking=accept-new \
+            "$USER@$HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' \
+             GHCR_USERNAME='$GHCR_USERNAME' \
+             GHCR_TOKEN='$GHCR_TOKEN' \
+             SCRAPER_IMAGE='$SCRAPER_IMAGE' \
+             WATCH_SERVICES='$WATCH_SERVICES' \
+             bash -s" <<'REMOTE'
+
+          set -euo pipefail
+
+          cd "$DEPLOY_PATH"
+
+          echo "$GHCR_TOKEN" \
+            | docker login ghcr.io \
+                -u "$GHCR_USERNAME" \
+                --password-stdin
+
+          export SCRAPER_IMAGE
+
+          docker compose config >/dev/null
+
+          docker compose pull $WATCH_SERVICES
+
+          docker compose up \
+            -d \
+            --remove-orphans \
+            $WATCH_SERVICES
+
+          sleep 5
+
+          docker compose ps
+
+          failed=0
+
+          for service in $WATCH_SERVICES; do
+            container_id="$(docker compose ps -q "$service")"
+
+            if [ -z "$container_id" ]; then
+              echo "$service did not create a container." >&2
+              failed=1
+              continue
+            fi
+
+            running="$(
+              docker inspect \
+                -f '{{.State.Running}}' \
+                "$container_id"
+            )"
+
+            if [ "$running" != "true" ]; then
+              echo "$service is not running." >&2
+              docker compose logs --tail 100 "$service" >&2 || true
+              failed=1
+            fi
+          done
+
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
+
+          docker image prune -f
+          REMOTE
