@@ -20,6 +20,7 @@ services:
       - ./.auth:/app/.auth:ro
     restart: unless-stopped
     init: true
+    ipc: host
 
   jobright-ca-watch:
     image: *scraper_image
@@ -40,6 +41,7 @@ services:
       - ./.auth:/app/.auth:ro
     restart: unless-stopped
     init: true
+    ipc: host
 
   builtin-watch:
     image: *scraper_image
@@ -54,6 +56,7 @@ services:
       - /opt/applypilot/env/scraper.env
     restart: unless-stopped
     init: true
+    ipc: host
 
   remotehunter-watch:
     image: *scraper_image
@@ -70,6 +73,7 @@ services:
       - /opt/applypilot/env/scraper.env
     restart: unless-stopped
     init: true
+    ipc: host
 
   hiringcafe-watch:
     image: *scraper_image
@@ -84,6 +88,7 @@ services:
       - /opt/applypilot/env/scraper.env
     restart: unless-stopped
     init: true
+    ipc: host
 
   scrape:
     image: *scraper_image
