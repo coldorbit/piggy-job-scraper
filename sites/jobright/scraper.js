@@ -49,6 +49,9 @@ const APPLY_MODE_LABELS = {
   [APPLY_NOW_TEXT]: 'Apply Now',
   [APPLY_WITH_AUTOFILL_TEXT]: 'Apply with Autofill',
 };
+const LISTING_CARD_WAIT_MS = 15_000;
+const LISTING_NAVIGATION_TIMEOUT_MS = 20_000;
+const LISTING_LOAD_ATTEMPTS = 2;
 
 const DEFAULT_ARGS = {
   country: normalizeCountry(process.env.JOBRIGHT_COUNTRY || 'us'),
@@ -396,6 +399,50 @@ async function waitForQuietPage(page, timeoutMs, settleMs = 2500) {
   }
 }
 
+async function listingPageDiagnostic(page, response) {
+  const title = cleanWhitespace(await page.title().catch(() => '')) || 'untitled';
+  const bodyText = cleanWhitespace(await page.locator('body').innerText().catch(() => ''));
+  const state = /captcha|verify you are human|just a moment|access denied|too many requests/i.test(bodyText)
+    ? 'challenge or rate limit'
+    : /(?:^|\s)0 results|no jobs found/i.test(bodyText)
+      ? 'empty results'
+      : bodyText
+        ? `page rendered ${bodyText.length} text characters`
+        : 'empty page';
+
+  return `HTTP ${response?.status() || 'unknown'}, title "${title}", ${state}, final URL ${page.url()}`;
+}
+
+async function loadListingPage(page, sourceUrl, args) {
+  const cardWaitMs = Math.min(args.timeoutMs, LISTING_CARD_WAIT_MS);
+  const navigationTimeoutMs = Math.min(args.timeoutMs, LISTING_NAVIGATION_TIMEOUT_MS);
+  let lastError;
+
+  for (let attempt = 1; attempt <= LISTING_LOAD_ATTEMPTS; attempt += 1) {
+    let response;
+    try {
+      response = await page.goto(sourceUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: navigationTimeoutMs,
+      });
+      await maybeAcceptPopups(page);
+      await page.locator("a[href*='/jobs/info/']").first().waitFor({
+        state: 'attached',
+        timeout: cardWaitMs,
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+      const diagnostic = await listingPageDiagnostic(page, response);
+      console.warn(
+        `Jobright listing load attempt ${attempt}/${LISTING_LOAD_ATTEMPTS} failed after waiting up to ${cardWaitMs}ms: ${diagnostic}`,
+      );
+    }
+  }
+
+  throw new Error(`no job cards after ${LISTING_LOAD_ATTEMPTS} attempts (${lastError?.message || 'unknown error'})`);
+}
+
 async function maybeSelectMostRecentSort(page, args) {
   const sorter = page
     .locator(
@@ -408,7 +455,7 @@ async function maybeSelectMostRecentSort(page, args) {
   try {
     await sorter.click({ timeout: 5000 });
     await page.getByText('Most Recent', { exact: true }).last().click({ timeout: 5000 });
-    await waitForQuietPage(page, args.timeoutMs, args.scrollPauseMs);
+    await waitForQuietPage(page, Math.min(args.timeoutMs, 10_000), args.scrollPauseMs);
     if (args.debug) console.log('Selected Jobright Most Recent sort.');
   } catch (error) {
     if (args.debug) console.warn(`Could not select Jobright Most Recent sort: ${error.message}`);
@@ -564,20 +611,23 @@ async function scrapeJobrightJobs(args, context) {
   const sourceUrls = await resolveSourceUrls(args);
   const allJobs = [];
   const seenUrls = new Set();
+  let successfulSources = 0;
   const page = await context.newPage();
 
   try {
     for (let sourceIndex = 0; sourceIndex < sourceUrls.length; sourceIndex += 1) {
       const sourceUrl = sourceUrls[sourceIndex];
       console.log(`Jobright ${config.label} source ${sourceIndex + 1}/${sourceUrls.length}: ${sourceUrl}`);
-      await page.goto(sourceUrl, { waitUntil: 'domcontentloaded', timeout: args.timeoutMs });
-      await waitForQuietPage(page, args.timeoutMs);
-      await maybeAcceptPopups(page);
-      await maybeSelectMostRecentSort(page, args);
-      await page.locator("a[href*='/jobs/info/']").first().waitFor({
-        state: 'attached',
-        timeout: args.timeoutMs,
-      });
+      try {
+        await loadListingPage(page, sourceUrl, args);
+        await maybeSelectMostRecentSort(page, args);
+      } catch (error) {
+        console.warn(
+          `Skipping Jobright ${config.label} source ${sourceIndex + 1}/${sourceUrls.length}: ${error.message}`,
+        );
+        continue;
+      }
+      successfulSources += 1;
 
       const sourceJobs = await scrollAndCollectListingJobs(page, args);
       console.log(
@@ -593,6 +643,10 @@ async function scrapeJobrightJobs(args, context) {
         allJobs.push(job);
         if (args.limit > 0 && allJobs.length >= args.limit) return allJobs;
       }
+    }
+
+    if (!successfulSources) {
+      throw new Error(`all ${sourceUrls.length} Jobright ${config.label} sources failed to load`);
     }
   } finally {
     await page.close();
