@@ -22,6 +22,9 @@ Optional runtime settings:
 
 ```text
 WATCH_INTERVAL_MINUTES=5
+JOBRIGHT_WATCH_INTERVAL_MINUTES=10
+JOBRIGHT_CA_START_DELAY_SECONDS=300
+JOBRIGHT_DETAIL_CONCURRENCY=2
 JOBRIGHT_MAX_SCROLLS=30
 JOBRIGHT_US_URLS=
 JOBRIGHT_CA_URLS=
@@ -31,6 +34,8 @@ REMOTEHUNTER_MAX_SCROLLS=10
 ```
 
 Jobright runs US and Canada as separate scrapers because the site only allows one selected country per session. Save the US account session to `.auth/jobright-us.json` and the Canada account session to `.auth/jobright-ca.json`.
+
+The Docker watchers stagger Canada by five minutes and run Jobright every ten minutes by default. Jobright source loads also use jittered delays, retry backoff, and a circuit breaker after three consecutive source failures to avoid request bursts. Override these deployment defaults with `JOBRIGHT_WATCH_INTERVAL_MINUTES`, `JOBRIGHT_CA_START_DELAY_SECONDS`, and `JOBRIGHT_DETAIL_CONCURRENCY`.
 
 Existing rows are preserved by default during scraper startup. Destructive cleanup can be enabled only when you explicitly intend to prune old data:
 

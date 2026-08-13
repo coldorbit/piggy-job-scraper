@@ -1,4 +1,5 @@
 WATCH_INTERVAL_MINUTES ?= 5
+JOBRIGHT_WATCH_INTERVAL_MINUTES ?= 10
 JOBRIGHT_MAX_SCROLLS ?= 30
 REMOTEHUNTER_MAX_SCROLLS ?= 10
 
@@ -50,10 +51,10 @@ watch:
 	$(MAKE) -j5 watch-jobright watch-jobright-ca watch-builtin watch-remotehunter watch-hiringcafe
 
 watch-jobright:
-	node sites/jobright/scraper.js --country us --watch --watch-interval-minutes $(WATCH_INTERVAL_MINUTES) --max-scrolls $(JOBRIGHT_MAX_SCROLLS)
+	node sites/jobright/scraper.js --country us --watch --watch-interval-minutes $(JOBRIGHT_WATCH_INTERVAL_MINUTES) --max-scrolls $(JOBRIGHT_MAX_SCROLLS) --detail-concurrency 2
 
 watch-jobright-ca:
-	node sites/jobright/scraper.js --country ca --watch --watch-interval-minutes $(WATCH_INTERVAL_MINUTES) --max-scrolls $(JOBRIGHT_MAX_SCROLLS)
+	node sites/jobright/scraper.js --country ca --watch --watch-interval-minutes $(JOBRIGHT_WATCH_INTERVAL_MINUTES) --max-scrolls $(JOBRIGHT_MAX_SCROLLS) --detail-concurrency 2
 
 watch-linkedin:
 	@printf '%s\n' 'LinkedIn scraper disabled; skipping watch.'

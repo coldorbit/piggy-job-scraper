@@ -51,7 +51,11 @@ const APPLY_MODE_LABELS = {
 };
 const LISTING_CARD_WAIT_MS = 15_000;
 const LISTING_NAVIGATION_TIMEOUT_MS = 20_000;
-const LISTING_LOAD_ATTEMPTS = 2;
+const LISTING_LOAD_ATTEMPTS = 3;
+const LISTING_RETRY_BASE_DELAY_MS = 5_000;
+const SOURCE_DELAY_MIN_MS = 2_000;
+const SOURCE_DELAY_MAX_MS = 5_000;
+const MAX_CONSECUTIVE_SOURCE_FAILURES = 3;
 
 const DEFAULT_ARGS = {
   country: normalizeCountry(process.env.JOBRIGHT_COUNTRY || 'us'),
@@ -59,7 +63,7 @@ const DEFAULT_ARGS = {
   urlsFile: '',
   slackWebhookUrl: process.env.SLACK_WEBHOOK_URL || '',
   slackChannel: process.env.SLACK_CHANNEL || '',
-  watchIntervalMinutes: 5,
+  watchIntervalMinutes: 10,
   limit: 0,
   maxScrolls: 40,
   scrollPauseMs: 900,
@@ -168,7 +172,7 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`Jobright remote tech job scraper\n\nUsage:\n  node sites/jobright/scraper.js [options]\n\nOptions:\n  --country us|ca            Country to scrape, default us or JOBRIGHT_COUNTRY\n  --url URL                  Jobright search page to scrape; repeat for multiple URLs\n  --start-url URL            Backward-compatible alias for a single Jobright search page\n  --urls-file PATH           Text file with one Jobright search URL per line\n  --slack-webhook-url URL    Slack incoming webhook URL, or use SLACK_WEBHOOK_URL\n  --slack-channel NAME       Optional channel override for compatible webhooks\n  --watch                    Keep polling Jobright and posting newly inserted jobs\n  --watch-interval-minutes N Minutes between watch runs, default 5\n  --limit N                  Maximum jobs to save, 0 means no limit\n  --max-scrolls N            Scroll attempts, default 40\n  --scroll-pause-ms N        Delay after each scroll, default 900\n  --timeout-ms N             Playwright timeout, default 60000\n  --description-limit N      Detail pages to open, 0 means all\n  --detail-concurrency N     Detail page concurrency, default 3\n  --storage-state PATH       Playwright logged-in storage state, default .auth/jobright-us.json or .auth/jobright-ca.json\n  --skip-descriptions        Do not scrape detail-page descriptions\n  --headless / --no-headless Browser visibility, default headless\n  --no-slack                 Disable Slack posting for this run\n  --debug                    Print card-detection diagnostics\n`);
+  console.log(`Jobright remote tech job scraper\n\nUsage:\n  node sites/jobright/scraper.js [options]\n\nOptions:\n  --country us|ca            Country to scrape, default us or JOBRIGHT_COUNTRY\n  --url URL                  Jobright search page to scrape; repeat for multiple URLs\n  --start-url URL            Backward-compatible alias for a single Jobright search page\n  --urls-file PATH           Text file with one Jobright search URL per line\n  --slack-webhook-url URL    Slack incoming webhook URL, or use SLACK_WEBHOOK_URL\n  --slack-channel NAME       Optional channel override for compatible webhooks\n  --watch                    Keep polling Jobright and posting newly inserted jobs\n  --watch-interval-minutes N Minutes between watch runs, default 10\n  --limit N                  Maximum jobs to save, 0 means no limit\n  --max-scrolls N            Scroll attempts, default 40\n  --scroll-pause-ms N        Delay after each scroll, default 900\n  --timeout-ms N             Playwright timeout, default 60000\n  --description-limit N      Detail pages to open, 0 means all\n  --detail-concurrency N     Detail page concurrency, default 3\n  --storage-state PATH       Playwright logged-in storage state, default .auth/jobright-us.json or .auth/jobright-ca.json\n  --skip-descriptions        Do not scrape detail-page descriptions\n  --headless / --no-headless Browser visibility, default headless\n  --no-slack                 Disable Slack posting for this run\n  --debug                    Print card-detection diagnostics\n`);
 }
 
 function normalizeCountry(value) {
@@ -437,10 +441,24 @@ async function loadListingPage(page, sourceUrl, args) {
       console.warn(
         `Jobright listing load attempt ${attempt}/${LISTING_LOAD_ATTEMPTS} failed after waiting up to ${cardWaitMs}ms: ${diagnostic}`,
       );
+      if (attempt < LISTING_LOAD_ATTEMPTS) {
+        const backoffMs = LISTING_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1) + randomInteger(0, 2_000);
+        console.warn(`Retrying Jobright listing in ${backoffMs}ms.`);
+        await sleep(backoffMs);
+      }
     }
   }
 
   throw new Error(`no job cards after ${LISTING_LOAD_ATTEMPTS} attempts (${lastError?.message || 'unknown error'})`);
+}
+
+function randomInteger(minimum, maximum) {
+  return Math.floor(Math.random() * (maximum - minimum + 1)) + minimum;
+}
+
+async function waitBeforeNextSource() {
+  const delayMs = randomInteger(SOURCE_DELAY_MIN_MS, SOURCE_DELAY_MAX_MS);
+  await sleep(delayMs);
 }
 
 async function maybeSelectMostRecentSort(page, args) {
@@ -612,22 +630,35 @@ async function scrapeJobrightJobs(args, context) {
   const allJobs = [];
   const seenUrls = new Set();
   let successfulSources = 0;
+  let consecutiveSourceFailures = 0;
+  let circuitBreakerOpened = false;
   const page = await context.newPage();
 
   try {
     for (let sourceIndex = 0; sourceIndex < sourceUrls.length; sourceIndex += 1) {
+      if (sourceIndex > 0) await waitBeforeNextSource();
+
       const sourceUrl = sourceUrls[sourceIndex];
       console.log(`Jobright ${config.label} source ${sourceIndex + 1}/${sourceUrls.length}: ${sourceUrl}`);
       try {
         await loadListingPage(page, sourceUrl, args);
         await maybeSelectMostRecentSort(page, args);
       } catch (error) {
+        consecutiveSourceFailures += 1;
         console.warn(
           `Skipping Jobright ${config.label} source ${sourceIndex + 1}/${sourceUrls.length}: ${error.message}`,
         );
+        if (consecutiveSourceFailures >= MAX_CONSECUTIVE_SOURCE_FAILURES) {
+          circuitBreakerOpened = true;
+          console.warn(
+            `Stopping Jobright ${config.label} source scan after ${consecutiveSourceFailures} consecutive load failures.`,
+          );
+          break;
+        }
         continue;
       }
       successfulSources += 1;
+      consecutiveSourceFailures = 0;
 
       const sourceJobs = await scrollAndCollectListingJobs(page, args);
       console.log(
@@ -646,7 +677,10 @@ async function scrapeJobrightJobs(args, context) {
     }
 
     if (!successfulSources) {
-      throw new Error(`all ${sourceUrls.length} Jobright ${config.label} sources failed to load`);
+      const reason = circuitBreakerOpened
+        ? `the circuit breaker opened after ${MAX_CONSECUTIVE_SOURCE_FAILURES} consecutive failures`
+        : `all ${sourceUrls.length} sources failed to load`;
+      throw new Error(`no Jobright ${config.label} sources loaded because ${reason}`);
     }
   } finally {
     await page.close();
