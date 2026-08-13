@@ -574,10 +574,10 @@ async function scrapeJobrightJobs(args, context) {
       await waitForQuietPage(page, args.timeoutMs);
       await maybeAcceptPopups(page);
       await maybeSelectMostRecentSort(page, args);
-      await page.waitForFunction(
-        () => document.querySelectorAll("a[href*='/jobs/info/']").length > 0,
-        { timeout: args.timeoutMs },
-      );
+      await page.locator("a[href*='/jobs/info/']").first().waitFor({
+        state: 'attached',
+        timeout: args.timeoutMs,
+      });
 
       const sourceJobs = await scrollAndCollectListingJobs(page, args);
       console.log(
