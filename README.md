@@ -36,7 +36,7 @@ JOBRIGHT_UK_STORAGE_STATE=.auth/jobright-uk.json
 REMOTEHUNTER_MAX_SCROLLS=10
 ```
 
-Jobright runs US, Canada, and UK as separate scrapers because the site only allows one selected country per session. Save the account sessions to `.auth/jobright-us.json`, `.auth/jobright-ca.json`, and `.auth/jobright-uk.json` respectively.
+Jobright runs US, Canada, and UK as separate scrapers. Listing searches use signed-out browser contexts so Jobright preserves each search URL instead of redirecting to account recommendations. Saved sessions at `.auth/jobright-us.json`, `.auth/jobright-ca.json`, and `.auth/jobright-uk.json` are used only to enrich job detail pages.
 
 The Docker watchers stagger Canada by five minutes and UK by ten minutes, and run Jobright every ten minutes by default. Jobright source loads also use jittered delays, retry backoff, and a circuit breaker after three consecutive source failures to avoid request bursts. Override these deployment defaults with `JOBRIGHT_WATCH_INTERVAL_MINUTES`, `JOBRIGHT_CA_START_DELAY_SECONDS`, `JOBRIGHT_UK_START_DELAY_SECONDS`, and `JOBRIGHT_DETAIL_CONCURRENCY`.
 

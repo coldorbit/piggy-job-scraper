@@ -594,7 +594,7 @@ async function collectListingJobs(page, sourceUrl, args, seenUrls = new Set()) {
     if (debug && seenUrls.size <= 5) console.log(`Card ${seenUrls.size}: ${listingText.slice(0, 300)}`);
 
     const listingApplyMode = applyModeFromActions(card.actionTexts || []);
-    if (listingApplyMode !== APPLY_MODE_LABELS[APPLY_WITH_AUTOFILL_TEXT]) continue;
+    if (!listingApplyMode) continue;
 
     const parsed = mergeNonEmpty(parseCardText(listingText, args.country), card);
     const filterText = [listingText, parsed.location, parsed.workMode].filter(Boolean).join(' ');
@@ -880,7 +880,7 @@ async function inspectJobDetail(context, job, options) {
       detailApplyMode === APPLY_MODE_LABELS[APPLY_WITH_AUTOFILL_TEXT];
     job.applyMode = hasAutofillApplyMode ? APPLY_MODE_LABELS[APPLY_WITH_AUTOFILL_TEXT] : detailApplyMode || job.applyMode;
     if (!job.applyMode) {
-      if (debug) console.log(`Skipping Jobright job without Apply with Autofill: ${job.url}`);
+      if (debug) console.log(`Skipping Jobright job without an eligible apply action: ${job.url}`);
       return null;
     }
 
@@ -1049,23 +1049,27 @@ async function runScraper(args) {
   if (args.storageState && !storageState) {
     console.warn(`Jobright storage state not found at ${args.storageState}; scraping as a guest session.`);
   }
-  const context = await browser.newContext({
+  const contextOptions = {
     viewport: { width: 1440, height: 1100 },
     userAgent:
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-    ...(storageState ? { storageState } : {}),
-  });
+  };
+  const listingContext = await browser.newContext(contextOptions);
+  const detailContext = storageState
+    ? await browser.newContext({ ...contextOptions, storageState })
+    : listingContext;
   let jobs = [];
   try {
-    jobs = await scrapeJobrightJobs(args, context);
+    jobs = await scrapeJobrightJobs(args, listingContext);
     console.log(`Found ${jobs.length} remote ${config.label} tech jobs posted within the last 24 hours.`);
 
-    jobs = await filterEligibleJobDetails(context, jobs, args);
+    jobs = await filterEligibleJobDetails(detailContext, jobs, args);
     console.log(
-      `Kept ${jobs.length} English-only Jobright ${config.label} jobs with Apply with Autofill on the card.`,
+      `Kept ${jobs.length} English-only Jobright ${config.label} jobs with an eligible apply action.`,
     );
   } finally {
-    await context.close();
+    if (detailContext !== listingContext) await detailContext.close();
+    await listingContext.close();
     await browser.close();
   }
 
