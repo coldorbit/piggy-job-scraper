@@ -4,11 +4,28 @@ import test from 'node:test';
 import { chromium } from 'playwright';
 import {
   assertMostRecentSort,
+  externalApplyModeFromActions,
   isRemoteForCountry,
   moveJobList,
+  originalJobUrlFromHref,
   trackJobrightBatches,
   verifyJobrightCountryFilter,
 } from '../sites/jobright/scraper.js';
+
+test('Jobright keeps only external autofill application actions', () => {
+  assert.equal(externalApplyModeFromActions(['Apply Now']), '');
+  assert.equal(externalApplyModeFromActions(['Apply Now', 'Apply with Autofill']), 'Apply with Autofill');
+});
+
+test('Jobright resolves only off-site original application URLs', () => {
+  assert.equal(originalJobUrlFromHref('https://jobright.ai/jobs/info/example'), '');
+  assert.equal(
+    originalJobUrlFromHref(
+      'https://jobright.ai/redirect?url=https%3A%2F%2Fboards.greenhouse.io%2Facme%2Fjobs%2F123',
+    ),
+    'https://boards.greenhouse.io/acme/jobs/123',
+  );
+});
 
 test('Jobright sort verification reads only the selected value', async (context) => {
   const browser = await chromium.launch({ headless: true });

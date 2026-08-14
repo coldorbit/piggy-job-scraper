@@ -226,7 +226,7 @@ function absoluteUrl(href) {
   return new URL(href, BASE_URL).toString();
 }
 
-function originalJobUrlFromHref(href) {
+export function originalJobUrlFromHref(href) {
   try {
     const parsed = new URL(href, BASE_URL);
     if (!['http:', 'https:'].includes(parsed.protocol)) return '';
@@ -347,14 +347,12 @@ function applyModeFromText(text) {
   return '';
 }
 
-function applyModeFromActions(actions) {
-  let fallbackApplyMode = '';
+export function externalApplyModeFromActions(actions) {
   for (const text of actions) {
     const applyMode = applyModeFromText(text);
     if (applyMode === APPLY_MODE_LABELS[APPLY_WITH_AUTOFILL_TEXT]) return applyMode;
-    if (applyMode && !fallbackApplyMode) fallbackApplyMode = applyMode;
   }
-  return fallbackApplyMode;
+  return '';
 }
 
 function parseCardText(text, country) {
@@ -921,7 +919,7 @@ async function collectListingJobs(page, sourceUrl, args, seenUrls = new Set()) {
     if (!listingText) continue;
     if (debug && seenUrls.size <= 5) console.log(`Card ${seenUrls.size}: ${listingText.slice(0, 300)}`);
 
-    const listingApplyMode = applyModeFromActions(card.actionTexts || []);
+    const listingApplyMode = externalApplyModeFromActions(card.actionTexts || []);
     if (!listingApplyMode) continue;
 
     const parsed = mergeNonEmpty(parseCardText(listingText, args.country), card);
@@ -1187,13 +1185,7 @@ async function visibleApplyActions(page) {
 async function eligibleApplyMode(page) {
   const actions = await visibleApplyActions(page).catch(() => []);
   const actionTexts = actions.map((action) => action.text);
-  if (actionTexts.some((text) => applyModeFromText(text) === APPLY_MODE_LABELS[APPLY_NOW_TEXT])) {
-    return APPLY_MODE_LABELS[APPLY_NOW_TEXT];
-  }
-  if (actionTexts.some((text) => applyModeFromText(text) === APPLY_MODE_LABELS[APPLY_WITH_AUTOFILL_TEXT])) {
-    return APPLY_MODE_LABELS[APPLY_WITH_AUTOFILL_TEXT];
-  }
-  return '';
+  return externalApplyModeFromActions(actionTexts);
 }
 
 async function extractOriginalJobPostUrl(page) {
@@ -1254,24 +1246,22 @@ async function inspectJobDetail(context, job, options) {
       return null;
     }
 
-    const hasAutofillApplyMode =
+    const hasExternalApplyMode =
       job.applyMode === APPLY_MODE_LABELS[APPLY_WITH_AUTOFILL_TEXT] ||
       detailApplyMode === APPLY_MODE_LABELS[APPLY_WITH_AUTOFILL_TEXT];
-    job.applyMode = hasAutofillApplyMode ? APPLY_MODE_LABELS[APPLY_WITH_AUTOFILL_TEXT] : detailApplyMode || job.applyMode;
-    if (!job.applyMode) {
-      if (debug) console.log(`Skipping Jobright job without an eligible apply action: ${job.url}`);
+    if (!hasExternalApplyMode) {
+      if (debug) console.log(`Skipping Jobright job without an external apply action: ${job.url}`);
       return null;
     }
+    job.applyMode = APPLY_MODE_LABELS[APPLY_WITH_AUTOFILL_TEXT];
 
-    if (hasAutofillApplyMode) {
-      const originalJobUrl = await extractOriginalJobPostUrl(page);
-      if (originalJobUrl) {
-        job.jobrightUrl = job.url;
-        job.url = originalJobUrl;
-      } else if (debug) {
-        console.log(`Could not find original Jobright autofill post URL: ${job.url}`);
-      }
+    const originalJobUrl = await extractOriginalJobPostUrl(page);
+    if (!originalJobUrl) {
+      if (debug) console.log(`Skipping Jobright job without a resolvable external URL: ${job.url}`);
+      return null;
     }
+    job.jobrightUrl = job.url;
+    job.url = originalJobUrl;
 
     if (includeDescription && descriptionText) {
       job.description = descriptionText.slice(0, 20000);
@@ -1442,7 +1432,7 @@ async function runScraper(args) {
 
     jobs = await filterEligibleJobDetails(context, jobs, args);
     console.log(
-      `Kept ${jobs.length} English-only Jobright ${config.label} jobs with an eligible apply action.`,
+      `Kept ${jobs.length} English-only Jobright ${config.label} jobs with a resolvable external apply link.`,
     );
   } finally {
     await context.close();
