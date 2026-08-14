@@ -2,7 +2,13 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import { chromium } from 'playwright';
-import { assertMostRecentSort, moveJobList, trackJobrightBatches } from '../sites/jobright/scraper.js';
+import {
+  assertMostRecentSort,
+  isRemoteForCountry,
+  moveJobList,
+  trackJobrightBatches,
+  verifyJobrightCountryFilter,
+} from '../sites/jobright/scraper.js';
 
 test('Jobright sort verification reads only the selected value', async (context) => {
   const browser = await chromium.launch({ headless: true });
@@ -65,4 +71,28 @@ test('Jobright infinite-scroll tracker preserves prefetched batches', async () =
   assert.equal((await tracker.next(50)).position, 10);
   assert.equal((await tracker.next(50)).position, 20);
   tracker.stop();
+});
+
+test('verified Jobright country feeds accept remote city and province cards', () => {
+  assert.equal(isRemoteForCountry('Toronto, ON Remote', 'ca'), false);
+  assert.equal(isRemoteForCountry('Toronto, ON Remote', 'ca', true), true);
+  assert.equal(isRemoteForCountry('Austin, TX Remote', 'us', true), true);
+});
+
+test('Jobright country verification rejects a mislabeled session', async () => {
+  const page = {
+    request: {
+      post: async () => ({
+        ok: () => true,
+        json: async () => ({ result: { country: 'GB' } }),
+      }),
+    },
+  };
+  const args = { authenticatedSession: true, country: 'us', timeoutMs: 60_000, debug: false };
+
+  await assert.rejects(
+    verifyJobrightCountryFilter(page, args),
+    /United States session has the United Kingdom country filter/,
+  );
+  assert.notEqual(args.countryFilterVerified, true);
 });

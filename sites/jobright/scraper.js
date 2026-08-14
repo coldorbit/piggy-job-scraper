@@ -22,6 +22,7 @@ const DEFAULT_JOBRIGHT_SEARCHES = [
 const JOBRIGHT_COUNTRIES = {
   us: {
     label: 'United States',
+    filterCountryCode: 'US',
     dbLocation: 'usa',
     defaultLocation: 'United States',
     urlLocationSlug: 'remote-united-states',
@@ -34,6 +35,7 @@ const JOBRIGHT_COUNTRIES = {
   },
   ca: {
     label: 'Canada',
+    filterCountryCode: 'CA',
     dbLocation: 'canada',
     defaultLocation: 'Canada',
     urlLocationSlug: 'remote-canada',
@@ -45,6 +47,7 @@ const JOBRIGHT_COUNTRIES = {
   },
   uk: {
     label: 'United Kingdom',
+    filterCountryCode: 'GB',
     dbLocation: 'uk',
     defaultLocation: 'United Kingdom',
     urlLocationSlug: 'remote-united-kingdom',
@@ -329,11 +332,11 @@ function isRecent(postedAt, now = new Date()) {
   return postedAt.getTime() >= now.getTime() - 24 * 60 * 60 * 1000;
 }
 
-function isRemoteForCountry(text, country) {
+export function isRemoteForCountry(text, country, countryFilterVerified = false) {
   const config = countryConfig(country);
   const normalized = cleanWhitespace(text).toLowerCase();
   const hasRemote = /\b(remote|work from home|wfh)\b/i.test(normalized);
-  return hasRemote && config.locationPattern.test(normalized);
+  return hasRemote && (countryFilterVerified || config.locationPattern.test(normalized));
 }
 
 function applyModeFromText(text) {
@@ -560,6 +563,37 @@ async function loadListingPage(page, sourceUrl, args) {
   }
 
   throw new Error(`no job cards after ${LISTING_LOAD_ATTEMPTS} attempts (${lastError?.message || 'unknown error'})`);
+}
+
+export async function verifyJobrightCountryFilter(page, args) {
+  if (!args.authenticatedSession) {
+    args.countryFilterVerified = false;
+    return;
+  }
+
+  const config = countryConfig(args.country);
+  const response = await page.request.post(`${BASE_URL}/swan/filter/get/filter`, {
+    timeout: Math.min(args.timeoutMs, 15_000),
+  });
+  if (!response.ok()) {
+    throw new Error(`Jobright country filter check returned HTTP ${response.status()}`);
+  }
+
+  const payload = await response.json();
+  const actualCountryCode = cleanWhitespace(payload?.result?.country).toUpperCase();
+  if (actualCountryCode !== config.filterCountryCode) {
+    const actualCountry =
+      Object.values(JOBRIGHT_COUNTRIES).find((country) => country.filterCountryCode === actualCountryCode)?.label ||
+      actualCountryCode ||
+      'unknown';
+    throw new Error(
+      `Jobright ${config.label} session has the ${actualCountry} country filter; ` +
+        `expected ${config.label}. Refusing to scrape the wrong country.`,
+    );
+  }
+
+  args.countryFilterVerified = true;
+  if (args.debug) console.log(`Verified Jobright country filter: ${config.label}.`);
 }
 
 function randomInteger(minimum, maximum) {
@@ -892,7 +926,7 @@ async function collectListingJobs(page, sourceUrl, args, seenUrls = new Set()) {
 
     const parsed = mergeNonEmpty(parseCardText(listingText, args.country), card);
     const filterText = [listingText, parsed.location, parsed.workMode].filter(Boolean).join(' ');
-    if (!isRemoteForCountry(filterText, args.country)) continue;
+    if (!isRemoteForCountry(filterText, args.country, args.countryFilterVerified)) continue;
 
     const postedAt = parsePostedTime(parsed.postedText, now);
     if (!isRecent(postedAt, now)) continue;
@@ -1013,6 +1047,7 @@ async function scrapeJobrightJobs(args, context) {
       console.log(`Jobright ${config.label} source ${sourceIndex + 1}/${sourceUrls.length}: ${sourceUrl}`);
       try {
         await loadListingPage(page, sourceUrl, args);
+        await verifyJobrightCountryFilter(page, args);
         await selectMostRecentSort(page, args);
       } catch (error) {
         consecutiveSourceFailures += 1;
