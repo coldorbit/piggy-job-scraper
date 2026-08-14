@@ -1,6 +1,7 @@
 ﻿import 'dotenv/config';
 import axios from 'axios';
 import fs from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
 import { saveJobsToPostgres } from '../lib/postgres.js';
 import {
@@ -570,49 +571,114 @@ async function waitBeforeNextSource() {
   await sleep(delayMs);
 }
 
-async function selectMostRecentSort(page, args) {
-  await page.waitForFunction(
-    () =>
-      Array.from(document.querySelectorAll("[class*='jobs-recommend-sorter'], .ant-select")).some((element) =>
-        /recommended|top matched|most recent/i.test(element.textContent || ''),
-      ),
-    undefined,
-    { timeout: Math.min(args.timeoutMs, 15_000) },
-  );
+export async function selectedJobSortText(page) {
+  const sorter = page.locator("[class*='jobs-recommend-sorter']").first();
+  if (!(await sorter.count())) return '';
 
-  const mostRecentSorter = page
-    .locator(
-      "xpath=//*[contains(@class, 'jobs-recommend-sorter') or contains(concat(' ', normalize-space(@class), ' '), ' ant-select ')][contains(., 'Most Recent')]",
-    )
-    .first();
-  if (await mostRecentSorter.count()) {
+  const selectedItem = sorter.locator('.ant-select-selection-item').first();
+  const text = (await selectedItem.count())
+    ? await selectedItem.innerText().catch(() => '')
+    : await sorter.innerText().catch(() => '');
+  return cleanWhitespace(text);
+}
+
+export async function assertMostRecentSort(page) {
+  const selectedSort = await selectedJobSortText(page);
+  if (!/^most recent$/i.test(selectedSort)) {
+    throw new Error(
+      `Jobright Most Recent sort verification failed; selected value is "${selectedSort || 'unknown'}"`,
+    );
+  }
+}
+
+export async function moveJobList(page, { reset = false } = {}) {
+  return page.evaluate(({ resetToTop }) => {
+    const jobLinkSelector = "a[href*='/jobs/info/']";
+    const canScroll = (element) => {
+      if (!element) return false;
+      const style = window.getComputedStyle(element);
+      return element.scrollHeight > element.clientHeight + 1 && /(auto|scroll)/i.test(style.overflowY);
+    };
+
+    const explicitCandidates = Array.from(
+      document.querySelectorAll(
+        '#jobs-page-main-content, [class*="jobs-page-main-content" i], [class*="jobs-list-scrollable" i]',
+      ),
+    );
+    const firstJobLink = document.querySelector(jobLinkSelector);
+    const ancestorCandidates = [];
+    for (let current = firstJobLink?.parentElement; current; current = current.parentElement) {
+      if (canScroll(current)) ancestorCandidates.push(current);
+    }
+    const containingCandidates = Array.from(document.querySelectorAll('*')).filter(
+      (element) => canScroll(element) && element.querySelector(jobLinkSelector),
+    );
+    const target =
+      [...explicitCandidates, ...ancestorCandidates, ...containingCandidates].find(canScroll) ||
+      explicitCandidates.find((element) => element.querySelector(jobLinkSelector));
+
+    if (target) {
+      const before = target.scrollTop;
+      const distance = Math.max(Math.round(target.clientHeight * 0.8), 600);
+      target.scrollTo({ top: resetToTop ? 0 : before + distance });
+      return {
+        target:
+          target.id ||
+          Array.from(target.classList).find((className) => /jobs.*(?:content|scroll)/i.test(className)) ||
+          target.tagName.toLowerCase(),
+        before,
+        after: target.scrollTop,
+        max: Math.max(target.scrollHeight - target.clientHeight, 0),
+      };
+    }
+
+    const scrollingElement = document.scrollingElement;
+    if (!scrollingElement || scrollingElement.scrollHeight <= scrollingElement.clientHeight + 1) {
+      throw new Error('Jobright job-list scroll container was not found');
+    }
+
+    const before = scrollingElement.scrollTop;
+    const distance = Math.max(Math.round(window.innerHeight * 0.8), 600);
+    window.scrollTo({ top: resetToTop ? 0 : before + distance });
+    return {
+      target: 'window',
+      before,
+      after: scrollingElement.scrollTop,
+      max: Math.max(scrollingElement.scrollHeight - scrollingElement.clientHeight, 0),
+    };
+  }, { resetToTop: reset });
+}
+
+async function selectMostRecentSort(page, args) {
+  await dismissVisiblePopups(page);
+  const sorter = page.locator("[class*='jobs-recommend-sorter']").first();
+  await sorter.waitFor({ state: 'visible', timeout: Math.min(args.timeoutMs, 15_000) });
+
+  if (/^most recent$/i.test(await selectedJobSortText(page))) {
+    await assertMostRecentSort(page);
+    await moveJobList(page, { reset: true });
     if (args.debug) console.log('Verified Jobright Most Recent sort is already selected.');
     return;
   }
 
-  const sorter = page
-    .locator(
-      "xpath=//*[contains(@class, 'jobs-recommend-sorter') or contains(concat(' ', normalize-space(@class), ' '), ' ant-select ')][contains(., 'Recommended') or contains(., 'Top Matched')]",
-    )
-    .first();
-
-  if (!(await sorter.count())) throw new Error('Jobright sort control was not found');
-
   await sorter.click({ timeout: 5000 });
-  await page.getByText('Most Recent', { exact: true }).last().click({ timeout: 5000 });
+  const mostRecentOption = page.getByRole('option', { name: 'Most Recent', exact: true }).filter({ visible: true });
+  const mostRecentText = page.getByText('Most Recent', { exact: true }).filter({ visible: true });
+  const option = (await mostRecentOption.count()) ? mostRecentOption.first() : mostRecentText.last();
+  await option.click({ timeout: 5000 });
   await page.waitForFunction(
-    () =>
-      Array.from(document.querySelectorAll("[class*='jobs-recommend-sorter'], .ant-select")).some(
-        (element) => /most recent/i.test(element.textContent || ''),
-      ),
+    () => {
+      const sorter = document.querySelector("[class*='jobs-recommend-sorter']");
+      const selected = sorter?.querySelector('.ant-select-selection-item');
+      return /^most recent$/i.test((selected?.textContent || '').replace(/\s+/g, ' ').trim());
+    },
     undefined,
     { timeout: 5000 },
   );
-  await page.waitForTimeout(Math.max(args.scrollPauseMs, 2_000));
-  await page.locator("a[href*='/jobs/info/']").first().waitFor({
-    state: 'attached',
-    timeout: Math.min(args.timeoutMs, LISTING_CARD_WAIT_MS),
-  });
+  await waitForQuietPage(page, Math.min(args.timeoutMs, 10_000), Math.max(args.scrollPauseMs, 2_000));
+  await waitForVisibleJobList(page, Math.min(args.timeoutMs, LISTING_CARD_WAIT_MS), args.debug);
+  await assertMostRecentSort(page);
+  await moveJobList(page, { reset: true });
 
   if (args.debug) console.log('Selected and verified Jobright Most Recent sort.');
 }
@@ -754,6 +820,7 @@ async function scrollAndCollectListingJobs(page, args) {
 
   for (let index = 0; index <= args.maxScrolls; index += 1) {
     await dismissVisiblePopups(page);
+    await assertMostRecentSort(page);
     jobs.push(...(await collectListingJobs(page, page.url(), args, seenUrls)));
 
     const currentCardCount = seenUrls.size;
@@ -761,14 +828,14 @@ async function scrollAndCollectListingJobs(page, args) {
     if (stableRounds >= 3 || index === args.maxScrolls) break;
 
     previousCardCount = currentCardCount;
-    const scrollDistance = Math.round((page.viewportSize()?.height || 1000) * 0.8);
-    await page.evaluate((distance) => {
-      const listing = Array.from(document.querySelectorAll('[class*="jobs-list-scrollable" i]')).find(
-        (element) => element.scrollHeight > element.clientHeight,
+    const scrollState = await moveJobList(page);
+    if (args.debug) {
+      console.log(
+        `Jobright scroll ${index + 1}/${args.maxScrolls} on ${scrollState.target}: ` +
+          `${Math.round(scrollState.before)} -> ${Math.round(scrollState.after)} ` +
+          `(max ${Math.round(scrollState.max)}), ${currentCardCount} unique listing URL(s) seen.`,
       );
-      if (listing) listing.scrollBy(0, distance);
-      else window.scrollBy(0, distance);
-    }, scrollDistance);
+    }
     await page.waitForTimeout(args.scrollPauseMs);
   }
 
@@ -1244,14 +1311,16 @@ async function watchScraper(args) {
   }
 }
 
-try {
-  const args = parseArgs(process.argv.slice(2));
-  if (args.watch) {
-    await watchScraper(args);
-  } else {
-    await runScraper(args);
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    const args = parseArgs(process.argv.slice(2));
+    if (args.watch) {
+      await watchScraper(args);
+    } else {
+      await runScraper(args);
+    }
+  } catch (error) {
+    console.error(error.message);
+    process.exitCode = 1;
   }
-} catch (error) {
-  console.error(error.message);
-  process.exitCode = 1;
 }
