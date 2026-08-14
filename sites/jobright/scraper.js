@@ -268,8 +268,6 @@ async function existingStorageState(path) {
 }
 
 async function resolveSourceUrls(args) {
-  if (args.authenticatedSession) return [`${BASE_URL}/jobs/recommend`];
-
   const defaultUrls = DEFAULT_JOBRIGHT_SEARCHES.map((search) => searchToJobrightUrl(search, args.country));
   const urls = [
     ...args.urls,
@@ -1057,7 +1055,6 @@ async function runScraper(args) {
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
     ...(storageState ? { storageState } : {}),
   });
-  args.authenticatedSession = Boolean(storageState);
   let jobs = [];
   try {
     jobs = await scrapeJobrightJobs(args, context);
