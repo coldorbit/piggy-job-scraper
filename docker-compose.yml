@@ -29,7 +29,10 @@ services:
       - sh
       - -c
       - >-
-        sleep "$${JOBRIGHT_CA_START_DELAY_SECONDS:-300}";
+        jobright_delay="$${JOBRIGHT_CA_START_DELAY_SECONDS:-300}";
+        echo "Delaying Jobright Canada watcher startup by $${jobright_delay}s.";
+        sleep "$${jobright_delay}";
+        echo "Starting Jobright Canada watcher.";
         exec node sites/jobright/scraper.js
         --country ca
         --watch
@@ -51,7 +54,10 @@ services:
       - sh
       - -c
       - >-
-        sleep "$${JOBRIGHT_UK_START_DELAY_SECONDS:-600}";
+        jobright_delay="$${JOBRIGHT_UK_START_DELAY_SECONDS:-600}";
+        echo "Delaying Jobright United Kingdom watcher startup by $${jobright_delay}s.";
+        sleep "$${jobright_delay}";
+        echo "Starting Jobright United Kingdom watcher.";
         exec node sites/jobright/scraper.js
         --country uk
         --watch

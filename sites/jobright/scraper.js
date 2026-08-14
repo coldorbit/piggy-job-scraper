@@ -62,7 +62,7 @@ const APPLY_MODE_LABELS = {
   [APPLY_NOW_TEXT]: 'Apply Now',
   [APPLY_WITH_AUTOFILL_TEXT]: 'Apply with Autofill',
 };
-const LISTING_CARD_WAIT_MS = 15_000;
+const LISTING_CARD_WAIT_MS = 30_000;
 const LISTING_NAVIGATION_TIMEOUT_MS = 20_000;
 const LISTING_LOAD_ATTEMPTS = 3;
 const LISTING_RETRY_BASE_DELAY_MS = 5_000;
@@ -268,6 +268,8 @@ async function existingStorageState(path) {
 }
 
 async function resolveSourceUrls(args) {
+  if (args.authenticatedSession) return [`${BASE_URL}/jobs/recommend`];
+
   const defaultUrls = DEFAULT_JOBRIGHT_SEARCHES.map((search) => searchToJobrightUrl(search, args.country));
   const urls = [
     ...args.urls,
@@ -475,23 +477,51 @@ async function waitBeforeNextSource() {
   await sleep(delayMs);
 }
 
-async function maybeSelectMostRecentSort(page, args) {
+async function selectMostRecentSort(page, args) {
+  await page.waitForFunction(
+    () =>
+      Array.from(document.querySelectorAll("[class*='jobs-recommend-sorter'], .ant-select")).some((element) =>
+        /recommended|top matched|most recent/i.test(element.textContent || ''),
+      ),
+    undefined,
+    { timeout: Math.min(args.timeoutMs, 15_000) },
+  );
+
+  const mostRecentSorter = page
+    .locator(
+      "xpath=//*[contains(@class, 'jobs-recommend-sorter') or contains(concat(' ', normalize-space(@class), ' '), ' ant-select ')][contains(., 'Most Recent')]",
+    )
+    .first();
+  if (await mostRecentSorter.count()) {
+    if (args.debug) console.log('Verified Jobright Most Recent sort is already selected.');
+    return;
+  }
+
   const sorter = page
     .locator(
       "xpath=//*[contains(@class, 'jobs-recommend-sorter') or contains(concat(' ', normalize-space(@class), ' '), ' ant-select ')][contains(., 'Recommended') or contains(., 'Top Matched')]",
     )
     .first();
 
-  if (!(await sorter.count())) return;
+  if (!(await sorter.count())) throw new Error('Jobright sort control was not found');
 
-  try {
-    await sorter.click({ timeout: 5000 });
-    await page.getByText('Most Recent', { exact: true }).last().click({ timeout: 5000 });
-    await waitForQuietPage(page, Math.min(args.timeoutMs, 10_000), args.scrollPauseMs);
-    if (args.debug) console.log('Selected Jobright Most Recent sort.');
-  } catch (error) {
-    if (args.debug) console.warn(`Could not select Jobright Most Recent sort: ${error.message}`);
-  }
+  await sorter.click({ timeout: 5000 });
+  await page.getByText('Most Recent', { exact: true }).last().click({ timeout: 5000 });
+  await page.waitForFunction(
+    () =>
+      Array.from(document.querySelectorAll("[class*='jobs-recommend-sorter'], .ant-select")).some(
+        (element) => /most recent/i.test(element.textContent || ''),
+      ),
+    undefined,
+    { timeout: 5000 },
+  );
+  await page.waitForTimeout(Math.max(args.scrollPauseMs, 2_000));
+  await page.locator("a[href*='/jobs/info/']").first().waitFor({
+    state: 'attached',
+    timeout: Math.min(args.timeoutMs, LISTING_CARD_WAIT_MS),
+  });
+
+  if (args.debug) console.log('Selected and verified Jobright Most Recent sort.');
 }
 
 function mergeNonEmpty(...objects) {
@@ -669,7 +699,7 @@ async function scrapeJobrightJobs(args, context) {
       console.log(`Jobright ${config.label} source ${sourceIndex + 1}/${sourceUrls.length}: ${sourceUrl}`);
       try {
         await loadListingPage(page, sourceUrl, args);
-        await maybeSelectMostRecentSort(page, args);
+        await selectMostRecentSort(page, args);
       } catch (error) {
         consecutiveSourceFailures += 1;
         console.warn(
@@ -1049,27 +1079,24 @@ async function runScraper(args) {
   if (args.storageState && !storageState) {
     console.warn(`Jobright storage state not found at ${args.storageState}; scraping as a guest session.`);
   }
-  const contextOptions = {
+  const context = await browser.newContext({
     viewport: { width: 1440, height: 1100 },
     userAgent:
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-  };
-  const listingContext = await browser.newContext(contextOptions);
-  const detailContext = storageState
-    ? await browser.newContext({ ...contextOptions, storageState })
-    : listingContext;
+    ...(storageState ? { storageState } : {}),
+  });
+  args.authenticatedSession = Boolean(storageState);
   let jobs = [];
   try {
-    jobs = await scrapeJobrightJobs(args, listingContext);
+    jobs = await scrapeJobrightJobs(args, context);
     console.log(`Found ${jobs.length} remote ${config.label} tech jobs posted within the last 24 hours.`);
 
-    jobs = await filterEligibleJobDetails(detailContext, jobs, args);
+    jobs = await filterEligibleJobDetails(context, jobs, args);
     console.log(
       `Kept ${jobs.length} English-only Jobright ${config.label} jobs with an eligible apply action.`,
     );
   } finally {
-    if (detailContext !== listingContext) await detailContext.close();
-    await listingContext.close();
+    await context.close();
     await browser.close();
   }
 
