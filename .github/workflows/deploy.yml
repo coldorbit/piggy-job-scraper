@@ -20,6 +20,7 @@ env:
   WATCH_SERVICES: >-
     jobright-watch
     jobright-ca-watch
+    jobright-uk-watch
     builtin-watch
     remotehunter-watch
     hiringcafe-watch

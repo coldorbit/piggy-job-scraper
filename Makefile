@@ -3,7 +3,7 @@ JOBRIGHT_WATCH_INTERVAL_MINUTES ?= 10
 JOBRIGHT_MAX_SCROLLS ?= 30
 REMOTEHUNTER_MAX_SCROLLS ?= 10
 
-.PHONY: help install-browsers scrape scrape-jobright scrape-jobright-ca scrape-linkedin scrape-builtin scrape-simplify scrape-diversityjobs scrape-remoteyeah scrape-remotehunter scrape-hiringcafe watch watch-jobright watch-jobright-ca watch-linkedin watch-builtin watch-simplify watch-diversityjobs watch-remoteyeah watch-remotehunter watch-hiringcafe docker-build docker-scrape docker-watch docker-down
+.PHONY: help install-browsers scrape scrape-jobright scrape-jobright-ca scrape-jobright-uk scrape-linkedin scrape-builtin scrape-simplify scrape-diversityjobs scrape-remoteyeah scrape-remotehunter scrape-hiringcafe watch watch-jobright watch-jobright-ca watch-jobright-uk watch-linkedin watch-builtin watch-simplify watch-diversityjobs watch-remoteyeah watch-remotehunter watch-hiringcafe docker-build docker-scrape docker-watch docker-down
 
 help:
 	@printf '%s\n' \
@@ -18,13 +18,16 @@ help:
 install-browsers:
 	pnpm install:browsers
 
-scrape: scrape-jobright scrape-jobright-ca scrape-builtin scrape-remotehunter scrape-hiringcafe
+scrape: scrape-jobright scrape-jobright-ca scrape-jobright-uk scrape-builtin scrape-remotehunter scrape-hiringcafe
 
 scrape-jobright:
 	pnpm jobright:scrape -- --max-scrolls $(JOBRIGHT_MAX_SCROLLS)
 
 scrape-jobright-ca:
 	pnpm jobright:ca:scrape -- --max-scrolls $(JOBRIGHT_MAX_SCROLLS)
+
+scrape-jobright-uk:
+	pnpm jobright:uk:scrape -- --max-scrolls $(JOBRIGHT_MAX_SCROLLS)
 
 scrape-linkedin:
 	@printf '%s\n' 'LinkedIn scraper disabled; skipping.'
@@ -48,13 +51,16 @@ scrape-hiringcafe:
 	pnpm hiringcafe:scrape
 
 watch:
-	$(MAKE) -j5 watch-jobright watch-jobright-ca watch-builtin watch-remotehunter watch-hiringcafe
+	$(MAKE) -j6 watch-jobright watch-jobright-ca watch-jobright-uk watch-builtin watch-remotehunter watch-hiringcafe
 
 watch-jobright:
 	node sites/jobright/scraper.js --country us --watch --watch-interval-minutes $(JOBRIGHT_WATCH_INTERVAL_MINUTES) --max-scrolls $(JOBRIGHT_MAX_SCROLLS) --detail-concurrency 2
 
 watch-jobright-ca:
 	node sites/jobright/scraper.js --country ca --watch --watch-interval-minutes $(JOBRIGHT_WATCH_INTERVAL_MINUTES) --max-scrolls $(JOBRIGHT_MAX_SCROLLS) --detail-concurrency 2
+
+watch-jobright-uk:
+	node sites/jobright/scraper.js --country uk --watch --watch-interval-minutes $(JOBRIGHT_WATCH_INTERVAL_MINUTES) --max-scrolls $(JOBRIGHT_MAX_SCROLLS) --detail-concurrency 2
 
 watch-linkedin:
 	@printf '%s\n' 'LinkedIn scraper disabled; skipping watch.'
@@ -84,7 +90,7 @@ docker-scrape:
 	docker compose run --rm scrape
 
 docker-watch:
-	docker compose up -d --remove-orphans jobright-watch jobright-ca-watch builtin-watch remotehunter-watch hiringcafe-watch
+	docker compose up -d --remove-orphans jobright-watch jobright-ca-watch jobright-uk-watch builtin-watch remotehunter-watch hiringcafe-watch
 
 docker-down:
 	docker compose down

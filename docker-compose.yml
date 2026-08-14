@@ -44,6 +44,28 @@ services:
     init: true
     ipc: host
 
+  jobright-uk-watch:
+    image: *scraper_image
+    build: .
+    command:
+      - sh
+      - -c
+      - >-
+        sleep "$${JOBRIGHT_UK_START_DELAY_SECONDS:-600}";
+        exec node sites/jobright/scraper.js
+        --country uk
+        --watch
+        --watch-interval-minutes "$${JOBRIGHT_WATCH_INTERVAL_MINUTES:-10}"
+        --max-scrolls "$${JOBRIGHT_MAX_SCROLLS:-30}"
+        --detail-concurrency "$${JOBRIGHT_DETAIL_CONCURRENCY:-2}"
+    env_file:
+      - /opt/applypilot/env/scraper.env
+    volumes:
+      - ./.auth:/app/.auth:ro
+    restart: unless-stopped
+    init: true
+    ipc: host
+
   builtin-watch:
     image: *scraper_image
     build: .
@@ -100,6 +122,7 @@ services:
       - >
         node sites/jobright/scraper.js --country us --max-scrolls "${JOBRIGHT_MAX_SCROLLS:-30}"
         && node sites/jobright/scraper.js --country ca --max-scrolls "${JOBRIGHT_MAX_SCROLLS:-30}"
+        && node sites/jobright/scraper.js --country uk --max-scrolls "${JOBRIGHT_MAX_SCROLLS:-30}"
         && node sites/builtin/scraper.js
         && node sites/remotehunter/scraper.js --max-scrolls "${REMOTEHUNTER_MAX_SCROLLS:-10}"
         && node sites/hiringcafe/scraper.js

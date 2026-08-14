@@ -24,18 +24,21 @@ Optional runtime settings:
 WATCH_INTERVAL_MINUTES=5
 JOBRIGHT_WATCH_INTERVAL_MINUTES=10
 JOBRIGHT_CA_START_DELAY_SECONDS=300
+JOBRIGHT_UK_START_DELAY_SECONDS=600
 JOBRIGHT_DETAIL_CONCURRENCY=2
 JOBRIGHT_MAX_SCROLLS=30
 JOBRIGHT_US_URLS=
 JOBRIGHT_CA_URLS=
+JOBRIGHT_UK_URLS=
 JOBRIGHT_US_STORAGE_STATE=.auth/jobright-us.json
 JOBRIGHT_CA_STORAGE_STATE=.auth/jobright-ca.json
+JOBRIGHT_UK_STORAGE_STATE=.auth/jobright-uk.json
 REMOTEHUNTER_MAX_SCROLLS=10
 ```
 
-Jobright runs US and Canada as separate scrapers because the site only allows one selected country per session. Save the US account session to `.auth/jobright-us.json` and the Canada account session to `.auth/jobright-ca.json`.
+Jobright runs US, Canada, and UK as separate scrapers because the site only allows one selected country per session. Save the account sessions to `.auth/jobright-us.json`, `.auth/jobright-ca.json`, and `.auth/jobright-uk.json` respectively.
 
-The Docker watchers stagger Canada by five minutes and run Jobright every ten minutes by default. Jobright source loads also use jittered delays, retry backoff, and a circuit breaker after three consecutive source failures to avoid request bursts. Override these deployment defaults with `JOBRIGHT_WATCH_INTERVAL_MINUTES`, `JOBRIGHT_CA_START_DELAY_SECONDS`, and `JOBRIGHT_DETAIL_CONCURRENCY`.
+The Docker watchers stagger Canada by five minutes and UK by ten minutes, and run Jobright every ten minutes by default. Jobright source loads also use jittered delays, retry backoff, and a circuit breaker after three consecutive source failures to avoid request bursts. Override these deployment defaults with `JOBRIGHT_WATCH_INTERVAL_MINUTES`, `JOBRIGHT_CA_START_DELAY_SECONDS`, `JOBRIGHT_UK_START_DELAY_SECONDS`, and `JOBRIGHT_DETAIL_CONCURRENCY`.
 
 Existing rows are preserved by default during scraper startup. Destructive cleanup can be enabled only when you explicitly intend to prune old data:
 
@@ -58,6 +61,7 @@ Run one source:
 ```bash
 pnpm jobright:scrape -- --max-scrolls 30
 pnpm jobright:ca:scrape -- --max-scrolls 30
+pnpm jobright:uk:scrape -- --max-scrolls 30
 pnpm builtin:watch -- --watch-interval-minutes 10
 ```
 
@@ -78,7 +82,7 @@ docker compose run --rm scrape
 Start all watcher containers:
 
 ```bash
-docker compose up -d --remove-orphans jobright-watch jobright-ca-watch builtin-watch remotehunter-watch hiringcafe-watch
+docker compose up -d --remove-orphans jobright-watch jobright-ca-watch jobright-uk-watch builtin-watch remotehunter-watch hiringcafe-watch
 ```
 
 View logs:
@@ -115,7 +119,7 @@ Edit `.env`, then run:
 
 ```bash
 docker compose build
-docker compose up -d --remove-orphans jobright-watch jobright-ca-watch builtin-watch remotehunter-watch hiringcafe-watch
+docker compose up -d --remove-orphans jobright-watch jobright-ca-watch jobright-uk-watch builtin-watch remotehunter-watch hiringcafe-watch
 ```
 
 ## GitHub Actions Deployment

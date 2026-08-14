@@ -42,6 +42,19 @@ const JOBRIGHT_COUNTRIES = {
     locationPattern: /\b(canada|canadian|remote,\s*canada|remote canada)\b/i,
     cardLocationPattern: /\b((?:[A-Z][A-Za-z .'-]+,\s*)?Canada|Remote,\s*Canada|Canada Remote)\b/i,
   },
+  uk: {
+    label: 'United Kingdom',
+    dbLocation: 'uk',
+    defaultLocation: 'United Kingdom',
+    urlLocationSlug: 'remote-united-kingdom',
+    envUrls: 'JOBRIGHT_UK_URLS',
+    envStorageState: 'JOBRIGHT_UK_STORAGE_STATE',
+    defaultStorageState: '.auth/jobright-uk.json',
+    locationPattern:
+      /\b(united kingdom|great britain|uk|u\.k\.|gb|remote,\s*(?:uk|united kingdom)|remote (?:uk|united kingdom))\b/i,
+    cardLocationPattern:
+      /\b((?:[A-Z][A-Za-z .'-]+,\s*)?(?:United Kingdom|Great Britain)|UK|U\.K\.|Remote,\s*(?:UK|United Kingdom)|(?:UK|United Kingdom) Remote)\b/i,
+  },
 };
 const APPLY_NOW_TEXT = 'apply now';
 const APPLY_WITH_AUTOFILL_TEXT = 'apply with autofill';
@@ -172,14 +185,15 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`Jobright remote tech job scraper\n\nUsage:\n  node sites/jobright/scraper.js [options]\n\nOptions:\n  --country us|ca            Country to scrape, default us or JOBRIGHT_COUNTRY\n  --url URL                  Jobright search page to scrape; repeat for multiple URLs\n  --start-url URL            Backward-compatible alias for a single Jobright search page\n  --urls-file PATH           Text file with one Jobright search URL per line\n  --slack-webhook-url URL    Slack incoming webhook URL, or use SLACK_WEBHOOK_URL\n  --slack-channel NAME       Optional channel override for compatible webhooks\n  --watch                    Keep polling Jobright and posting newly inserted jobs\n  --watch-interval-minutes N Minutes between watch runs, default 10\n  --limit N                  Maximum jobs to save, 0 means no limit\n  --max-scrolls N            Scroll attempts, default 40\n  --scroll-pause-ms N        Delay after each scroll, default 900\n  --timeout-ms N             Playwright timeout, default 60000\n  --description-limit N      Detail pages to open, 0 means all\n  --detail-concurrency N     Detail page concurrency, default 3\n  --storage-state PATH       Playwright logged-in storage state, default .auth/jobright-us.json or .auth/jobright-ca.json\n  --skip-descriptions        Do not scrape detail-page descriptions\n  --headless / --no-headless Browser visibility, default headless\n  --no-slack                 Disable Slack posting for this run\n  --debug                    Print card-detection diagnostics\n`);
+  console.log(`Jobright remote tech job scraper\n\nUsage:\n  node sites/jobright/scraper.js [options]\n\nOptions:\n  --country us|ca|uk         Country to scrape, default us or JOBRIGHT_COUNTRY\n  --url URL                  Jobright search page to scrape; repeat for multiple URLs\n  --start-url URL            Backward-compatible alias for a single Jobright search page\n  --urls-file PATH           Text file with one Jobright search URL per line\n  --slack-webhook-url URL    Slack incoming webhook URL, or use SLACK_WEBHOOK_URL\n  --slack-channel NAME       Optional channel override for compatible webhooks\n  --watch                    Keep polling Jobright and posting newly inserted jobs\n  --watch-interval-minutes N Minutes between watch runs, default 10\n  --limit N                  Maximum jobs to save, 0 means no limit\n  --max-scrolls N            Scroll attempts, default 40\n  --scroll-pause-ms N        Delay after each scroll, default 900\n  --timeout-ms N             Playwright timeout, default 60000\n  --description-limit N      Detail pages to open, 0 means all\n  --detail-concurrency N     Detail page concurrency, default 3\n  --storage-state PATH       Playwright logged-in storage state, default .auth/jobright-<country>.json\n  --skip-descriptions        Do not scrape detail-page descriptions\n  --headless / --no-headless Browser visibility, default headless\n  --no-slack                 Disable Slack posting for this run\n  --debug                    Print card-detection diagnostics\n`);
 }
 
 function normalizeCountry(value) {
   const normalized = cleanWhitespace(value).toLowerCase();
   if (['us', 'usa', 'united-states', 'united states'].includes(normalized)) return 'us';
   if (['ca', 'canada'].includes(normalized)) return 'ca';
-  throw new Error(`Unsupported Jobright country "${value}". Expected "us" or "ca".`);
+  if (['uk', 'gb', 'united-kingdom', 'united kingdom', 'great britain'].includes(normalized)) return 'uk';
+  throw new Error(`Unsupported Jobright country "${value}". Expected "us", "ca", or "uk".`);
 }
 
 function countryConfig(country) {
@@ -254,6 +268,8 @@ async function existingStorageState(path) {
 }
 
 async function resolveSourceUrls(args) {
+  if (args.authenticatedSession) return [`${BASE_URL}/jobs/recommend`];
+
   const defaultUrls = DEFAULT_JOBRIGHT_SEARCHES.map((search) => searchToJobrightUrl(search, args.country));
   const urls = [
     ...args.urls,
@@ -494,20 +510,27 @@ async function collectListingJobs(page, sourceUrl, args, seenUrls = new Set()) {
   const now = new Date();
   const scrapedAt = now.toISOString();
   const debug = args.debug;
-  const cards = await page.locator("a[href*='/jobs/info/']").evaluateAll((anchors) =>
-    anchors.map((anchor) => {
-      let cardRoot = anchor;
-      let current = anchor;
-      for (let depth = 0; current && depth < 6; depth += 1) {
-        const text = current.innerText || current.textContent || '';
-        const jobLinkCount =
-          (current.matches?.("a[href*='/jobs/info/']") ? 1 : 0) +
-          current.querySelectorAll("a[href*='/jobs/info/']").length;
-        if (/apply/i.test(text) && jobLinkCount <= 1) {
-          cardRoot = current;
-          break;
+  const cards = await page.locator("a[href*='/jobs/info/']").evaluateAll((anchors) => {
+    const seenHrefs = new Set();
+    return anchors.flatMap((anchor) => {
+      const href = anchor.getAttribute('href') || '';
+      if (!href || seenHrefs.has(href)) return [];
+      seenHrefs.add(href);
+
+      let cardRoot = anchor.closest('.job-card-flag-classname') || anchor;
+      if (cardRoot === anchor) {
+        let current = anchor;
+        for (let depth = 0; current && depth < 6; depth += 1) {
+          const text = current.innerText || current.textContent || '';
+          const jobLinkCount =
+            (current.matches?.("a[href*='/jobs/info/']") ? 1 : 0) +
+            current.querySelectorAll("a[href*='/jobs/info/']").length;
+          if (/apply/i.test(text) && jobLinkCount <= 1) {
+            cardRoot = current;
+            break;
+          }
+          current = current.parentElement;
         }
-        current = current.parentElement;
       }
 
       const actionsRoot = cardRoot.querySelector('[class*="actions" i]') || cardRoot;
@@ -516,7 +539,7 @@ async function collectListingJobs(page, sourceUrl, args, seenUrls = new Set()) {
         .filter((text) => /\bapply\b/i.test(text));
 
       return {
-        href: anchor.getAttribute('href') || '',
+        href,
         text: cardRoot.innerText || cardRoot.textContent || anchor.innerText || anchor.textContent || '',
         actionText: actionTexts.join(' | '),
         actionTexts,
@@ -551,8 +574,8 @@ async function collectListingJobs(page, sourceUrl, args, seenUrls = new Set()) {
           anchor.querySelector('[class*="remote" i]')?.textContent?.trim() ||
           '',
       };
-    }),
-  );
+    });
+  });
   const jobs = [];
 
   if (debug) console.log(`Detected ${cards.length} job cards.`);
@@ -605,19 +628,25 @@ async function collectListingJobs(page, sourceUrl, args, seenUrls = new Set()) {
 async function scrollAndCollectListingJobs(page, args) {
   const jobs = [];
   const seenUrls = new Set();
-  let previousHeight = 0;
+  let previousCardCount = 0;
   let stableRounds = 0;
 
   for (let index = 0; index <= args.maxScrolls; index += 1) {
     jobs.push(...(await collectListingJobs(page, page.url(), args, seenUrls)));
 
-    const currentHeight = await page.evaluate(() => document.body.scrollHeight);
-    stableRounds = currentHeight === previousHeight ? stableRounds + 1 : 0;
+    const currentCardCount = seenUrls.size;
+    stableRounds = currentCardCount === previousCardCount ? stableRounds + 1 : 0;
     if (stableRounds >= 3 || index === args.maxScrolls) break;
 
-    previousHeight = currentHeight;
+    previousCardCount = currentCardCount;
     const scrollDistance = Math.round((page.viewportSize()?.height || 1000) * 0.8);
-    await page.mouse.wheel(0, scrollDistance);
+    await page.evaluate((distance) => {
+      const listing = Array.from(document.querySelectorAll('[class*="jobs-list-scrollable" i]')).find(
+        (element) => element.scrollHeight > element.clientHeight,
+      );
+      if (listing) listing.scrollBy(0, distance);
+      else window.scrollBy(0, distance);
+    }, scrollDistance);
     await page.waitForTimeout(args.scrollPauseMs);
   }
 
@@ -1028,6 +1057,7 @@ async function runScraper(args) {
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
     ...(storageState ? { storageState } : {}),
   });
+  args.authenticatedSession = Boolean(storageState);
   let jobs = [];
   try {
     jobs = await scrapeJobrightJobs(args, context);
