@@ -620,7 +620,10 @@ export async function moveJobList(page, { reset = false } = {}) {
     if (target) {
       const before = target.scrollTop;
       const distance = Math.max(Math.round(target.clientHeight * 0.8), 600);
-      target.scrollTo({ top: resetToTop ? 0 : before + distance });
+      const maxBeforeScroll = Math.max(target.scrollHeight - target.clientHeight, 0);
+      const loadThreshold = Math.max(Math.round(target.clientHeight * 0.2), 150);
+      const nextTop = before + distance >= maxBeforeScroll - loadThreshold ? maxBeforeScroll : before + distance;
+      target.scrollTo({ top: resetToTop ? 0 : nextTop });
       return {
         target:
           target.id ||
@@ -629,6 +632,10 @@ export async function moveJobList(page, { reset = false } = {}) {
         before,
         after: target.scrollTop,
         max: Math.max(target.scrollHeight - target.clientHeight, 0),
+        height: target.scrollHeight,
+        nearBottom:
+          target.scrollTop >=
+          target.scrollHeight - target.clientHeight - loadThreshold,
       };
     }
 
@@ -639,14 +646,113 @@ export async function moveJobList(page, { reset = false } = {}) {
 
     const before = scrollingElement.scrollTop;
     const distance = Math.max(Math.round(window.innerHeight * 0.8), 600);
-    window.scrollTo({ top: resetToTop ? 0 : before + distance });
+    const maxBeforeScroll = Math.max(scrollingElement.scrollHeight - scrollingElement.clientHeight, 0);
+    const loadThreshold = Math.max(Math.round(scrollingElement.clientHeight * 0.2), 150);
+    const nextTop = before + distance >= maxBeforeScroll - loadThreshold ? maxBeforeScroll : before + distance;
+    window.scrollTo({ top: resetToTop ? 0 : nextTop });
     return {
       target: 'window',
       before,
       after: scrollingElement.scrollTop,
       max: Math.max(scrollingElement.scrollHeight - scrollingElement.clientHeight, 0),
+      height: scrollingElement.scrollHeight,
+      nearBottom:
+        scrollingElement.scrollTop >=
+          scrollingElement.scrollHeight -
+          scrollingElement.clientHeight -
+          loadThreshold,
     };
   }, { resetToTop: reset });
+}
+
+export function trackJobrightBatches(page) {
+  const queue = [];
+  let pending = null;
+
+  const deliver = (batch) => {
+    if (!pending) {
+      queue.push(batch);
+      return;
+    }
+    const { resolve, timer } = pending;
+    pending = null;
+    clearTimeout(timer);
+    resolve(batch);
+  };
+  const onResponse = (response) => {
+    let url;
+    try {
+      url = new URL(response.url());
+    } catch {
+      return;
+    }
+    if (url.pathname !== '/swan/recommend/list/jobs' || response.request().method() !== 'GET') return;
+
+    const position = Number(url.searchParams.get('position'));
+    if (!Number.isFinite(position) || position <= 0) return;
+    deliver({
+      position,
+      sortCondition: url.searchParams.get('sortCondition'),
+      status: response.status(),
+      url: response.url(),
+    });
+  };
+
+  page.on('response', onResponse);
+  return {
+    drain() {
+      return queue.splice(0, queue.length);
+    },
+    next(timeoutMs) {
+      if (queue.length) return Promise.resolve(queue.shift());
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          pending = null;
+          resolve(null);
+        }, timeoutMs);
+        pending = { resolve, timer };
+      });
+    },
+    stop() {
+      page.off('response', onResponse);
+      if (pending) {
+        const { resolve, timer } = pending;
+        pending = null;
+        clearTimeout(timer);
+        resolve(null);
+      }
+    },
+  };
+}
+
+async function waitForJobListAdvance(page, previousMax, knownUrls, timeoutMs) {
+  try {
+    await page.waitForFunction(
+      ({ oldMax, urls }) => {
+        const jobLinkSelector = "a[href*='/jobs/info/']";
+        const known = new Set(urls);
+        const explicit = Array.from(
+          document.querySelectorAll(
+            '#jobs-page-main-content, [class*="jobs-page-main-content" i], [class*="jobs-list-scrollable" i]',
+          ),
+        );
+        const target = explicit.find((element) => element.querySelector(jobLinkSelector));
+        if (!target) return false;
+
+        const max = Math.max(target.scrollHeight - target.clientHeight, 0);
+        if (max > oldMax + 1) return true;
+        return Array.from(target.querySelectorAll(jobLinkSelector)).some((anchor) => {
+          const href = anchor.getAttribute('href');
+          return href && !known.has(new URL(href, window.location.href).toString());
+        });
+      },
+      { oldMax: previousMax, urls: knownUrls },
+      { timeout: timeoutMs },
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function selectMostRecentSort(page, args) {
@@ -773,7 +879,6 @@ async function collectListingJobs(page, sourceUrl, args, seenUrls = new Set()) {
 
     const url = absoluteUrl(href);
     if (seenUrls.has(url)) {
-      console.log(`Jobright already seen listing URL during source scan: ${url}`);
       continue;
     }
     seenUrls.add(url);
@@ -815,28 +920,76 @@ async function collectListingJobs(page, sourceUrl, args, seenUrls = new Set()) {
 async function scrollAndCollectListingJobs(page, args) {
   const jobs = [];
   const seenUrls = new Set();
-  let previousCardCount = 0;
-  let stableRounds = 0;
+  let lastBatchPosition = 0;
+  const batchWaitMs = Math.min(Math.max(args.scrollPauseMs * 5, 5_000), 15_000);
+  const batchTracker = trackJobrightBatches(page);
 
-  for (let index = 0; index <= args.maxScrolls; index += 1) {
-    await dismissVisiblePopups(page);
-    await assertMostRecentSort(page);
-    jobs.push(...(await collectListingJobs(page, page.url(), args, seenUrls)));
+  try {
+    for (let index = 0; index <= args.maxScrolls; index += 1) {
+      await dismissVisiblePopups(page);
+      await assertMostRecentSort(page);
+      const previousCardCount = seenUrls.size;
+      jobs.push(...(await collectListingJobs(page, page.url(), args, seenUrls)));
 
-    const currentCardCount = seenUrls.size;
-    stableRounds = currentCardCount === previousCardCount ? stableRounds + 1 : 0;
-    if (stableRounds >= 3 || index === args.maxScrolls) break;
+      const currentCardCount = seenUrls.size;
+      const newCardCount = currentCardCount - previousCardCount;
+      if (index === args.maxScrolls) break;
 
-    previousCardCount = currentCardCount;
-    const scrollState = await moveJobList(page);
-    if (args.debug) {
-      console.log(
-        `Jobright scroll ${index + 1}/${args.maxScrolls} on ${scrollState.target}: ` +
-          `${Math.round(scrollState.before)} -> ${Math.round(scrollState.after)} ` +
-          `(max ${Math.round(scrollState.max)}), ${currentCardCount} unique listing URL(s) seen.`,
-      );
+      const batches = batchTracker.drain();
+      const scrollState = await moveJobList(page);
+      let advanced = true;
+
+      if (scrollState.nearBottom) {
+        if (!batches.length) {
+          const batch = await batchTracker.next(batchWaitMs);
+          if (batch) batches.push(batch);
+        }
+      } else {
+        await page.waitForTimeout(args.scrollPauseMs);
+      }
+      batches.push(...batchTracker.drain());
+
+      for (const batch of batches) {
+        if (batch.status < 200 || batch.status >= 300) {
+          throw new Error(`Jobright infinite-scroll batch returned HTTP ${batch.status}`);
+        }
+        if (batch.sortCondition !== '1') {
+          throw new Error(
+            `Jobright infinite-scroll batch used sortCondition=${batch.sortCondition || 'unknown'} instead of Most Recent`,
+          );
+        }
+        if (batch.position <= lastBatchPosition) {
+          throw new Error(
+            `Jobright infinite scroll repeated position ${batch.position} after position ${lastBatchPosition}`,
+          );
+        }
+        lastBatchPosition = batch.position;
+      }
+
+      if (scrollState.nearBottom) {
+        advanced = await waitForJobListAdvance(page, scrollState.max, [...seenUrls], batchWaitMs);
+        if (!advanced) {
+          if (args.debug) {
+            console.log(
+              `Jobright infinite scroll reached the end after position ${lastBatchPosition}; ` +
+                `${currentCardCount} unique listing URL(s) seen.`,
+            );
+          }
+          break;
+        }
+      }
+
+      if (args.debug) {
+        console.log(
+          `Jobright scroll ${index + 1}/${args.maxScrolls} on ${scrollState.target}: ` +
+            `${Math.round(scrollState.before)} -> ${Math.round(scrollState.after)} ` +
+            `(max ${Math.round(scrollState.max)}), ${newCardCount} new / ${currentCardCount} total URL(s)` +
+            `${batches.length ? `, loaded batch position(s) ${batches.map((batch) => batch.position).join(', ')}` : ''}.`,
+        );
+      }
     }
-    await page.waitForTimeout(args.scrollPauseMs);
+  } finally {
+    batchTracker.stop();
   }
 
   return jobs;

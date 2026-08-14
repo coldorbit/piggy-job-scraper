@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import { chromium } from 'playwright';
-import { assertMostRecentSort, moveJobList } from '../sites/jobright/scraper.js';
+import { assertMostRecentSort, moveJobList, trackJobrightBatches } from '../sites/jobright/scraper.js';
 
 test('Jobright sort verification reads only the selected value', async (context) => {
   const browser = await chromium.launch({ headless: true });
@@ -46,4 +47,22 @@ test('Jobright scrolling moves its internal job-list panel', async (context) => 
   assert.equal(state.before, 0);
   assert.ok(state.after >= 600);
   assert.equal(await page.evaluate(() => window.scrollY), 0);
+});
+
+test('Jobright infinite-scroll tracker preserves prefetched batches', async () => {
+  const page = new EventEmitter();
+  const tracker = trackJobrightBatches(page);
+  const response = (position) => ({
+    url: () =>
+      `https://jobright.ai/swan/recommend/list/jobs?refresh=false&sortCondition=1&position=${position}&count=10`,
+    request: () => ({ method: () => 'GET' }),
+    status: () => 200,
+  });
+
+  page.emit('response', response(10));
+  page.emit('response', response(20));
+
+  assert.equal((await tracker.next(50)).position, 10);
+  assert.equal((await tracker.next(50)).position, 20);
+  tracker.stop();
 });
