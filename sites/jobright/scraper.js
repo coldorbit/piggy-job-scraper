@@ -401,14 +401,111 @@ async function extractCardFields(anchor) {
   });
 }
 
-async function maybeAcceptPopups(page) {
-  for (const label of ['Accept', 'Accept all', 'I agree', 'Got it', 'Close']) {
+async function dismissVisiblePopups(page) {
+  const popupScopes = page.locator(
+    "[role='dialog']:visible, .ant-modal-wrap:visible, .ant-drawer:visible, [class*='popup' i]:visible, [class*='modal' i]:visible",
+  );
+  const dismissAction = /^(?:close|dismiss|no thanks|not now|maybe later|skip|got it|decline|i'?ll pass|continue without.*|×)$/i;
+  let dismissed = 0;
+
+  for (let index = (await popupScopes.count()) - 1; index >= 0; index -= 1) {
+    const popup = popupScopes.nth(index);
+    if (!(await popup.isVisible().catch(() => false))) continue;
+
+    const action = popup.getByRole('button', { name: dismissAction }).first();
+    const closeControl = popup
+      .locator("button[aria-label*='close' i], [role='button'][aria-label*='close' i], .ant-modal-close, [class*='close-button' i]")
+      .first();
+    const control = (await action.count()) ? action : closeControl;
+    if (!(await control.count())) continue;
+
     try {
-      await page.getByRole('button', { name: new RegExp(label, 'i') }).click({ timeout: 750 });
+      await control.click({ force: true, timeout: 1500 });
+      dismissed += 1;
+      await page.waitForTimeout(150);
     } catch {
-      // Popup buttons are optional.
+      // A fallback below removes persistent promotional overlays.
     }
   }
+
+  dismissed += await page.evaluate(() => {
+    const promotionPattern = /exclusive offer|limited[- ]time offer|upgrade to turbo|upgrade now|special offer|subscribe|start (?:a )?trial/i;
+    const candidates = Array.from(
+      document.querySelectorAll("[role='dialog'], .ant-modal-wrap, .ant-drawer, [class*='popup' i], [class*='modal' i]"),
+    );
+    let removed = 0;
+
+    for (const element of candidates) {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      const visible =
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.display !== 'none' &&
+        style.visibility !== 'hidden' &&
+        Number(style.opacity) !== 0;
+      if (!visible || !promotionPattern.test(element.textContent || '')) continue;
+      element.remove();
+      removed += 1;
+    }
+
+    if (removed) {
+      document.querySelectorAll('.ant-modal-mask, .ant-drawer-mask').forEach((element) => element.remove());
+      document.body.style.removeProperty('overflow');
+      document.body.style.removeProperty('padding-right');
+    }
+    return removed;
+  }).catch(() => 0);
+
+  return dismissed;
+}
+
+async function waitForVisibleJobList(page, timeoutMs, debug = false) {
+  const deadline = Date.now() + timeoutMs;
+  let dismissed = 0;
+
+  while (Date.now() < deadline) {
+    dismissed += await dismissVisiblePopups(page);
+    const listReady = await page.evaluate(() => {
+      const visible = (element) => {
+        if (!element) return false;
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        return (
+          rect.width > 0 &&
+          rect.height > 0 &&
+          style.display !== 'none' &&
+          style.visibility !== 'hidden' &&
+          Number(style.opacity) !== 0
+        );
+      };
+      const cardVisible = Array.from(document.querySelectorAll("a[href*='/jobs/info/']")).some((anchor) => {
+        let current = anchor.closest('.job-card-flag-classname') || anchor;
+        for (let depth = 0; current && depth < 6; depth += 1) {
+          if (visible(current) && /\bapply\b/i.test(current.innerText || current.textContent || '')) return true;
+          current = current.parentElement;
+        }
+        return false;
+      });
+      const blockingPopup = Array.from(
+        document.querySelectorAll("[role='dialog'], .ant-modal-wrap, .ant-drawer, [class*='popup' i], [class*='modal' i]"),
+      ).some((element) => {
+        if (!visible(element)) return false;
+        const rect = element.getBoundingClientRect();
+        const modalContainer = element.matches("[role='dialog'], .ant-modal-wrap, .ant-drawer");
+        return modalContainer || rect.width * rect.height >= window.innerWidth * window.innerHeight * 0.1;
+      });
+      return cardVisible && !blockingPopup;
+    }).catch(() => false);
+
+    if (listReady) {
+      if (debug && dismissed) console.log(`Dismissed ${dismissed} Jobright popup(s) before loading jobs.`);
+      return;
+    }
+    await page.waitForTimeout(250);
+  }
+
+  throw new Error(`no visible job cards after waiting ${timeoutMs}ms and dismissing ${dismissed} popup(s)`);
 }
 
 async function waitForQuietPage(page, timeoutMs, settleMs = 2500) {
@@ -445,11 +542,7 @@ async function loadListingPage(page, sourceUrl, args) {
         waitUntil: 'domcontentloaded',
         timeout: navigationTimeoutMs,
       });
-      await maybeAcceptPopups(page);
-      await page.locator("a[href*='/jobs/info/']").first().waitFor({
-        state: 'attached',
-        timeout: cardWaitMs,
-      });
+      await waitForVisibleJobList(page, cardWaitMs, args.debug);
       return;
     } catch (error) {
       lastError = error;
@@ -660,6 +753,7 @@ async function scrollAndCollectListingJobs(page, args) {
   let stableRounds = 0;
 
   for (let index = 0; index <= args.maxScrolls; index += 1) {
+    await dismissVisiblePopups(page);
     jobs.push(...(await collectListingJobs(page, page.url(), args, seenUrls)));
 
     const currentCardCount = seenUrls.size;
@@ -891,7 +985,7 @@ async function inspectJobDetail(context, job, options) {
   try {
     await page.goto(job.url, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
     await waitForQuietPage(page, timeoutMs);
-    await maybeAcceptPopups(page);
+    await dismissVisiblePopups(page);
 
     const detailApplyMode = await eligibleApplyMode(page);
     const descriptionText = cleanWhitespace(await extractDescriptionFromPage(page).catch(() => ''));
